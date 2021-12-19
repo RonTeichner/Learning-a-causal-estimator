@@ -113,13 +113,13 @@ for trainItr in range(nIndependentTrainings):
         increaseOfLearned = learned_e_k_give_k_minus_1_watt.mean() - pure_kalman_e_k_give_k_minus_1_watt.mean()
         decreaseOfLearned = kalman_e_k_give_k_minus_1_watt.mean() - learned_e_k_give_k_minus_1_watt.mean()
         print(f'learned filter error increases by {increaseOfLearned} [W] (w.r.t kalman filter) due to the unmodeled behavior; {increaseOfLearned/pure_kalman_e_k_give_k_minus_1_watt.mean()*100} %')
-        print(f'learned filter error is {decreaseOfLearned} [W] below the standart kalman filter')
-        print(f'learned filter removed {decreaseOfLearned/totalKalmanFilterIncrease*100} % of the increase in error of the standart filter')
+        print(f'learned filter error is {decreaseOfLearned} [W] below the standard kalman filter')
+        print(f'learned filter removed {decreaseOfLearned/totalKalmanFilterIncrease*100} % of the increase in error of the standard filter')
 
         print(f'the std of the error of the learned filter for a single run is {np.power(learned_e_k_give_k_minus_1, 2).sum(axis=2).sum(axis=0)[:, 0].std()} W')
 
 if nIndependentTrainings > 1:
-    print(f'The standart deviation between independent trainings is {np.asarray(learnedFilterErrorWattList).std()} watts')
+    print(f'The standard deviation between independent trainings is {np.asarray(learnedFilterErrorWattList).std()} watts')
 
 plt.figure()
 n_bins = 1000
