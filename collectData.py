@@ -15,9 +15,9 @@ from scipy import interpolate
 import pickle
 
 def united_acc_gyr_singleUserSingleDevice(Phones_acc_specificUserDevice_DF, Phones_gyr_specificUserDevice_DF, cutObservationsGapThr, minObservedDuration):
-    Phone_specificUserSpecificDevice = pd.concat([Phones_acc_specificUserDevice_DF, Phones_gyr_specificUserDevice_DF])
+    Phone_specificUserSpecificDevice = pd.concat([Phones_acc_specificUserDevice_DF, Phones_gyr_specificUserDevice_DF], ignore_index=True).reset_index(drop=True)
     Phone_specificUserSpecificDevice = Phone_specificUserSpecificDevice.sort_values(by=['Creation_Time'], ignore_index=True)
-    Phone_specificUserSpecificDevice = Phone_specificUserSpecificDevice.drop(columns=['Index', 'Arrival_Time'])
+    Phone_specificUserSpecificDevice = Phone_specificUserSpecificDevice.drop(columns=['Arrival_Time'])
     
     gtNanIndices = Phone_specificUserSpecificDevice['gt'].isna()
     Phone_specificUserSpecificDevice.loc[gtNanIndices, 'gt'] = 'noClass'
@@ -40,6 +40,7 @@ def united_acc_gyr_singleUserSingleDevice(Phones_acc_specificUserDevice_DF, Phon
     for i in range(startIndices.shape[0]):
         if durations[i] < minObservedDuration:
             Phone_specificUserSpecificDevice.drop(Phone_specificUserSpecificDevice.loc[Phone_specificUserSpecificDevice['batch']==i].index, inplace=True)
+    Phone_specificUserSpecificDevice = Phone_specificUserSpecificDevice.reset_index(drop=True)
     Phone_specificUserSpecificDevice.drop(columns=['batch'], inplace=True)
     Creation_Time = Phone_specificUserSpecificDevice['Creation_Time'].to_numpy()
     Creation_Time_diff = np.diff(Creation_Time)
@@ -82,7 +83,7 @@ def DataFrameResample(patientDf, fs):
         newData = np.concatenate((tVecNew[:, None], IdValues, batchValues, dataResampled), axis=1)
         df = pd.DataFrame(columns=columns, data=newData)
         
-        patientDfResampled = pd.concat([patientDfResampled, df])
+        patientDfResampled = pd.concat([patientDfResampled, df], ignore_index=True)
         
     return patientDfResampled
 
@@ -97,7 +98,7 @@ phone_gyr_path = './Activity recognition exp/Phones_gyroscope.csv'
 watch_acc_path = './Activity recognition exp/Watch_accelerometer.csv'
 watch_gyr_path = './Activity recognition exp/Watch_gyroscope.csv'
 
-createType = 'watch'  # {'phone', 'watch'}
+createType = 'phone'  # {'phone', 'watch'}
 if createType == 'phone':
     files = [(phone_acc_path, 'Pacc'), (phone_gyr_path, 'Pgyr')]  #, (watch_acc_path, 'Wacc'), (watch_gyr_path, 'Wgyr')]
 elif createType == 'watch':
@@ -120,21 +121,21 @@ for Model in Models:
     deviceDict = dict()
     
     path2file = files[0][0]
-    Phones_acc_DF = pd.read_csv(path2file)
+    Phones_acc_DF = pd.read_csv(path2file).drop(columns=['Index'])
     Phones_acc_DF = Phones_acc_DF[Phones_acc_DF['Model'].isin([Model])]
     Phones_acc_DF = Phones_acc_DF.rename(columns={"x": "acc_x", "y": "acc_y", "z": "acc_z"})
-    Phones_acc_DF.insert(6, "gyr_x", np.nan*np.ones(Phones_acc_DF.shape[0]))
-    Phones_acc_DF.insert(7, "gyr_y", np.nan*np.ones(Phones_acc_DF.shape[0]))
-    Phones_acc_DF.insert(8, "gyr_z", np.nan*np.ones(Phones_acc_DF.shape[0]))
+    Phones_acc_DF.insert(5, "gyr_x", np.nan*np.ones(Phones_acc_DF.shape[0]))
+    Phones_acc_DF.insert(6, "gyr_y", np.nan*np.ones(Phones_acc_DF.shape[0]))
+    Phones_acc_DF.insert(7, "gyr_z", np.nan*np.ones(Phones_acc_DF.shape[0]))
     
     
     path2file = files[1][0]
-    Phones_gyr_DF = pd.read_csv(path2file)
+    Phones_gyr_DF = pd.read_csv(path2file).drop(columns=['Index'])
     Phones_gyr_DF = Phones_gyr_DF[Phones_gyr_DF['Model'].isin([Model])]
     Phones_gyr_DF = Phones_gyr_DF.rename(columns={"x": "gyr_x", "y": "gyr_y", "z": "gyr_z"})
-    Phones_gyr_DF.insert(3, "acc_x", np.nan*np.ones(Phones_gyr_DF.shape[0]))
-    Phones_gyr_DF.insert(4, "acc_y", np.nan*np.ones(Phones_gyr_DF.shape[0]))
-    Phones_gyr_DF.insert(5, "acc_z", np.nan*np.ones(Phones_gyr_DF.shape[0]))
+    Phones_gyr_DF.insert(2, "acc_x", np.nan*np.ones(Phones_gyr_DF.shape[0]))
+    Phones_gyr_DF.insert(3, "acc_y", np.nan*np.ones(Phones_gyr_DF.shape[0]))
+    Phones_gyr_DF.insert(4, "acc_z", np.nan*np.ones(Phones_gyr_DF.shape[0]))
     
     Users = list(set(Phones_acc_DF['User'].unique().tolist()) & set(Phones_gyr_DF['User'].unique().tolist()))
     
@@ -163,7 +164,7 @@ for Model in Models:
             Phone_specificUserSpecificDevice = united_acc_gyr_singleUserSingleDevice(Phones_acc_specificUserDevice_DF, Phones_gyr_specificUserDevice_DF, cutObservationsGapThr, minObservedDuration)
             
             gt = Phone_specificUserSpecificDevice['gt']
-            gt[gt=='noClass'], gt[gt=='stand'], gt[gt=='sit'], gt[gt=='walk'], gt[gt=='stairsup'], gt[gt=='stairsdown'], gt[gt=='bike'] = -1, 0, 2, 3, 4, 5, 6
+            gt[gt=='noClass'], gt[gt=='stand'], gt[gt=='sit'], gt[gt=='walk'], gt[gt=='stairsup'], gt[gt=='stairsdown'], gt[gt=='bike'] = 0, 1, 2, 3, 4, 5, 6
             # this proceedure updated the values of the dataframe (because .copy() wasn't used)
             Phone_specificUserSpecificDevice = Phone_specificUserSpecificDevice.rename(columns={'Creation_Time': 'time'})
             columns = Phone_specificUserSpecificDevice.columns.tolist()
@@ -173,10 +174,10 @@ for Model in Models:
             Phone_specificUserSpecificDevice.insert(1, 'Id', Id*np.ones(Phone_specificUserSpecificDevice.shape[0]))                    
             Phone_specificUserSpecificDevice_resampled = DataFrameResample(Phone_specificUserSpecificDevice, fs)
                 
-            phonesDf = pd.concat([phonesDf, Phone_specificUserSpecificDevice_resampled])
+            phonesDf = pd.concat([phonesDf, Phone_specificUserSpecificDevice_resampled], ignore_index=True)
             
-            metaData = pd.DataFrame.from_dict({'Id': [Id], 'Classification': [Model[0]], 'Device': [device], 'User': [user]})
-            metaDataDf = pd.concat([metaDataDf, metaData])
+            metaData = pd.DataFrame.from_dict({'Id': [Id], 'Classification': [Model], 'Device': [device], 'User': [user]})
+            metaDataDf = pd.concat([metaDataDf, metaData], ignore_index=True)
             
 if createType == 'phone':
     pickle.dump({'phonesDf': phonesDf, 'metaDataDf': metaDataDf}, open('./Activity recognition exp/phonesData.pt', 'wb'))
