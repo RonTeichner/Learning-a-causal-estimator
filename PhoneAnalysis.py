@@ -19,22 +19,24 @@ from PhoneAnalysis_func import *
 
 
 createPhoneDataset = False
-enableTrain = True
+enableTrain = False
+enableTest = True
 
-phoneAnalysisFileName = 'train_nexus4'
+phoneAnalysisFileNameTrainData = 's3'  #'train_nexus4'
+phoneAnalysisFileNameTestData = 's3'  # {'s3', 'train_nexus4'}
 phoneSavedModelFileName = 'trainedOnNexus4'
 
-filePath = './Activity recognition exp/phonesData.pt'
-modelList = ['nexus4']
 
 if createPhoneDataset:
     print(f'creating dataset')
+    filePath = './Activity recognition exp/phonesData.pt'
+    modelList = ['s3']  # ['nexus4']
     phoneCompleteDataset = PhoneDataset(filePath, modelList)
-    pickle.dump(phoneCompleteDataset, open(phoneAnalysisFileName + '_dataset.pt', 'wb'))
+    pickle.dump(phoneCompleteDataset, open(phoneAnalysisFileNameTrainData + '_dataset.pt', 'wb'))
     
 if enableTrain:
     enablePlots = True
-    phoneCompleteDataset = pickle.load(open(phoneAnalysisFileName + '_dataset.pt', 'rb'))
+    phoneCompleteDataset = pickle.load(open(phoneAnalysisFileNameTrainData + '_dataset.pt', 'rb'))
     statisticsDict = {'mu': phoneCompleteDataset.mu, 'Sigma_minus_half': phoneCompleteDataset.Sigma_minus_half, 'Sigma_half': phoneCompleteDataset.Sigma_half}
     print(f'dataset contains {len(phoneCompleteDataset)} time series')
     
@@ -59,7 +61,7 @@ if enableTrain:
     
     enableDataParallel = True
     
-    modelDict = {'useSelectedFeatures': useSelectedFeatures, 'allFeatures': allFeatures, 'featuresIncludeInTrainIndices': featuresIncludeInTrainIndices, 'nFeatures': phoneCompleteDataset.nFeatures, 'trainOnNormalizedData': trainOnNormalizedData, 'statisticsDict': statisticsDict, 'fs': 1/0.005}
+    modelDict = {'nClasses': nClasses, 'hidden_dim': hidden_dim, 'num_layers': num_layers, 'useSelectedFeatures': useSelectedFeatures, 'allFeatures': allFeatures, 'featuresIncludeInTrainIndices': featuresIncludeInTrainIndices, 'nFeatures': phoneCompleteDataset.nFeatures, 'trainOnNormalizedData': trainOnNormalizedData, 'statisticsDict': statisticsDict, 'fs': 1/0.005}
     pickle.dump(modelDict, open(phoneSavedModelFileName +  '_modelDict.pt', 'wb'))
     
     model_state_dict_list, validationLoss_list = list(), list()
@@ -85,14 +87,14 @@ if enableTrain:
         #trainTestLoader = DataLoader(trainData, batch_size=600, shuffle=False, num_workers=0)
         validationLoader = DataLoader(validationData, batch_size=batchSize, shuffle=False, num_workers=0)
         
-        Filter_rnn = RNN_Filter(input_dim = len(allFeatures), hidden_dim=hidden_dim, output_dim=nClasses, num_layers=num_layers, modelDict=modelDict)
+        Filter_rnn = RNN_Filter(input_dim = len(modelDict['allFeatures']), hidden_dim=modelDict['hidden_dim'], output_dim=modelDict['nClasses'], num_layers=modelDict['num_layers'], modelDict=modelDict)
         
         # train:  
         validationLoss = np.inf
         for s in range(nTrainsOnSameSplit):
             print(f'starting training, attemp no. {s}')
             Filter_rnn.apply(init_weights)
-            model_state_dict_s, validationLoss_s = trainModel(Filter_rnn, trainLoader, validationLoader, phoneCompleteDataset, enableDataParallel, modelDict, enablePlots)
+            model_state_dict_s, validationLoss_s = trainModel(Filter_rnn, trainLoader, validationLoader, phoneCompleteDataset, enableDataParallel, modelDict, enablePlots, 'train')
             if validationLoss_s < validationLoss:
                 validationLoss = validationLoss_s
                 model_state_dict = model_state_dict_s
@@ -104,4 +106,21 @@ if enableTrain:
     validationLoss_array = np.asarray(validationLoss_list)
     Ann_idx = np.argsort(validationLoss_array)[0]    
     torch.save(model_state_dict_list[Ann_idx], phoneSavedModelFileName + '_model.pt')
+    
+if enableTest:
+    print(f'creating test dataset, filename {phoneAnalysisFileNameTestData}')
+    phoneCompleteDataset = pickle.load(open(phoneAnalysisFileNameTestData + '_dataset.pt', 'rb'))    
+    testLoader = DataLoader(phoneCompleteDataset, batch_size=20, shuffle=False, num_workers=0)     
+    
+    modelDict = pickle.load(open(phoneSavedModelFileName + '_modelDict.pt', 'rb'))
+    Filter_rnn = RNN_Filter(input_dim = len(modelDict['allFeatures']), hidden_dim=modelDict['hidden_dim'], output_dim=modelDict['nClasses'], num_layers=modelDict['num_layers'], modelDict=modelDict)
+    Filter_rnn.load_state_dict(torch.load(phoneSavedModelFileName  + '_model.pt'))
+    
+    # test:
+    print('starting test')
+    #device = 'cpu'
+    #Filter_rnn.eval().to(device)       
+    
+    _, _ = trainModel(Filter_rnn, testLoader, testLoader, phoneCompleteDataset, False, modelDict, True, 'test')
+    
           

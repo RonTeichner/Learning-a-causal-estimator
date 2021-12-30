@@ -227,47 +227,60 @@ def augCrop(measurements, measurements_tvec, lengthOfSeries, nMinimalSamples, nM
     
     return measurementsAug, measurements_tvecAug, lengthOfSeriesAug
     
-def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, enableDataParallel, modelDict, enablePlots):    
+def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, enableDataParallel, modelDict, enablePlots, mode):    
     lowThrLr = 1e-5
-    nValidationEpochs = 10  #20  # for averaging the stdRatio over many shuffles    
-    nMinimalSamples = np.floor(10*modelDict['fs'])  # equal to 10 seconds at the sample rate 
-    nMaximalSamples = np.floor(30*modelDict['fs'])
     nClasses = stateEst_ANN.output_dim
+    if mode == 'train':
+        nValidationEpochs = 10  # for averaging the results over many augmentations
+        nMinimalSamples = np.floor(10*modelDict['fs'])  # equal to 10 seconds at the sample rate 
+        nMaximalSamples = np.floor(30*modelDict['fs'])
+    elif mode == 'test':
+        nValidationEpochs = 5#30  # for averaging the results over many augmentations
+        nMinimalSamples = np.floor(10*modelDict['fs'])  # equal to 10 seconds at the sample rate 
+        nMaximalSamples = np.floor(30*modelDict['fs'])
+    
     
     # training method:    
-    lr = 0.001
-    optimizer = optim.Adam(stateEst_ANN.parameters(), lr=lr, weight_decay=0)
-    patience = 20
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor = 0.1*2, patience=patience, threshold=1e-6)
+    if mode == 'train':
+        lr = 0.001
+        optimizer = optim.Adam(stateEst_ANN.parameters(), lr=lr, weight_decay=0)
+        patience = 20
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor = 0.1*2, patience=patience, threshold=1e-6)
+        
     criterion = nn.NLLLoss(ignore_index=0)  # ignoring the noClass category
-    # moving model to cuda:
+    
+    # moving model to cuda:    
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")    
     if enableDataParallel and torch.cuda.device_count() > 1:
         # print("Let's use", torch.cuda.device_count(), "GPUs!")
         # dim = 0 [30, xxx] -> [10, ...], [10, ...], [10, ...] on 3 GPUs
-        stateEst_ANN = nn.DataParallel(stateEst_ANN)
+        stateEst_ANN = nn.DataParallel(stateEst_ANN)    
 
     stateEst_ANN.to(device)
     criterion.to(device)    
     #model.apply(init_weights)
 
     # training and saving the model when validation is best:
-    print('start training')
-    min_valid_loss, previousValidationMeanStd, previousValidationMeanCorrectFraction, previousValidationLoss = np.inf, np.inf, np.inf, np.inf
+    if mode == 'train': print('start training')
+    min_valid_loss, previousValidationMeanStd, previousValidationMeanCorrectFraction, previousValidationLikelihoodFraction, previousValidationLoss = np.inf, np.inf, np.inf, np.inf, np.inf
     epoch = -1
     minimalSeriesLength = 0
         
-    trainLossList, validationLossList, trainCorrectFractionist, validationCorrectFractionist, trainMeanStdList, validationMeanStdList, validationPearsonList, trainPearsonList = list(), list(), list(), list(), list(), list(), list(), list()
+    trainLossList, validationLossList, trainCorrectFractionist, trainLikelihoodList, validationCorrectFractionist, validationLikelihoodList, trainMeanStdList, validationMeanStdList, validationPearsonList, trainPearsonList = list(), list(), list(), list(), list(), list(), list(), list(), list(), list()
     
     while True:
         epoch += 1
-        train_loss, train_correctFraction = 0.0, np.zeros(nClasses+1)
-        if epoch > patience and np.mod(epoch, 10) == 0: print(f'training: starting epoch {epoch}; lr = {scheduler._last_lr[-1]}')
-        stateEst_ANN.train()
+        train_loss, train_correct, train_correct_nSamples, train_likelihood = 0.0, np.zeros(nClasses+1), np.zeros(nClasses+1), np.zeros(nClasses+1)
+        if mode == 'train' and epoch > patience and np.mod(epoch, 10) == 0: print(f'training: starting epoch {epoch}; lr = {scheduler._last_lr[-1]}')
+        
+        if mode == 'train':
+            stateEst_ANN.train()
+        elif mode == 'test':
+            stateEst_ANN.eval()
 
         for i_batch, sample_batched in enumerate(trainLoader):
             # print(f'starting epoch {epoch}, batch {i_batch}')
-            optimizer.zero_grad()
+            if mode == 'train': optimizer.zero_grad()
 
             lengthOfSeries = sample_batched["lengthOfSeries"]
             validSeries = lengthOfSeries >= minimalSeriesLength
@@ -278,7 +291,9 @@ def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, ena
             measurements_tvec = sample_batched["tVec"][:, :maxLengthOfSeries][validSeries]
             
             #  crop measurements for augmentations purpose:
-            measurements, measurements_tvec, lengthOfSeries = augCrop(measurements, measurements_tvec, lengthOfSeries, nMinimalSamples, nMaximalSamples)
+            if mode == 'train':
+                measurements, measurements_tvec, lengthOfSeries = augCrop(measurements, measurements_tvec, lengthOfSeries, nMinimalSamples, nMaximalSamples)
+            
             labels = measurements[:, :, -1][:, :, None].type(torch.int64)
             filteringLabels = labels[:, 1:]
             measurements = measurements[:, :, :-1]
@@ -312,34 +327,46 @@ def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, ena
             loss = criterion(hat_x_k_plus_1_given_k_flatten[validIndices], filteringLabels_flatten[validIndices, 0])            
      
             loss = measurements.shape[0]/len(trainLoader.dataset) * loss
-                                    
-            loss.backward()
-            optimizer.step()  # parameter update
+            
+            if mode == 'train':                        
+                loss.backward()
+                optimizer.step()  # parameter update
 
             train_loss += loss.item()  
             
-            correctClassificationFraction = np.zeros(nClasses+1)
+            correctClassification, likelihoods, correctClassification_nSamples = np.zeros(nClasses+1), np.zeros(nClasses+1), np.zeros(nClasses+1)
             estimations, labels = hat_x_k_plus_1_given_k_flatten[validIndices], filteringLabels_flatten[validIndices, 0]
             for c in range(nClasses):
                 labelIndices = labels == c
+                correctClassification_nSamples[c] = labelIndices.sum().item()
                 if labelIndices.sum() > 0:
-                    correctClassificationFraction[c] = ((torch.argmax(estimations[labelIndices], dim=1) == labels[labelIndices]).sum()/labelIndices.sum()).item()
+                    correctClassification[c] = ((torch.argmax(estimations[labelIndices], dim=1) == labels[labelIndices]).sum()).item()                    
+                    likelihoods[c] = np.exp(estimations[labelIndices, c].detach().cpu().numpy()).sum()
                 else:
-                    correctClassificationFraction[c] = 0
+                    correctClassification[c], likelihoods[c] = 0, 0
             classesIndices = labels > 0    # 0 is the no class that the filter is not trained on
-            correctClassificationFraction[-1] = ((torch.argmax(estimations[classesIndices], dim=1) == labels[classesIndices]).sum()/classesIndices.sum()).item()
-            correctClassificationFraction = measurements.shape[0]/len(trainLoader.dataset) * correctClassificationFraction
-            train_correctFraction = train_correctFraction + correctClassificationFraction
+            correctClassification[-1] = ((torch.argmax(estimations[classesIndices], dim=1) == labels[classesIndices]).sum()).item()   
+            allEstimations, allLabels = estimations[classesIndices].detach().cpu().numpy(), labels[classesIndices].detach().cpu().numpy()
+            for i in range(allEstimations.shape[0]):
+                likelihoods[-1] = likelihoods[-1] + np.exp(allEstimations[i, allLabels[i]])
+            correctClassification_nSamples[-1] = classesIndices.sum().item()
+            train_correct = train_correct + correctClassification
+            train_likelihood = train_likelihood + likelihoods
+            train_correct_nSamples = train_correct_nSamples + correctClassification_nSamples
 
         #scheduler.step(train_loss)
         trainLossList.append(train_loss)
-        trainCorrectFractionist.append(train_correctFraction)
+        trainCorrectFraction = np.divide(train_correct, train_correct_nSamples)
+        trainLikelihoodFractions = np.divide(train_likelihood, train_correct_nSamples)
+        trainCorrectFractionist.append(trainCorrectFraction)
+        trainLikelihoodList.append(trainLikelihoodFractions)
         # print("Outside: measurements size", measurements.size(), "combination size", combination.size())
 
-        validation_loss, validation_correctFraction = 0.0, 0.0
+        validation_loss, validation_correctFraction, validation_likelihoodFraction = 0.0, 0.0, 0.0
         stateEst_ANN.eval()
         for validationEpoch in range(nValidationEpochs):
-            validation_loss_singleEpoch, validation_correctFraction_singleEpoch = 0.0, 0.0
+            if mode == 'test': print(f'startin validation epoch {validationEpoch} out of {nValidationEpochs}')
+            validation_loss_singleEpoch, validation_correctFraction_singleEpoch, validation_likelihood_singleEpoch, validation_correctFraction_singleEpoch_nSamples = 0.0, 0.0, 0.0, 0.0
             for i_batch, sample_batched in enumerate(validationLoader):
                 lengthOfSeries = sample_batched["lengthOfSeries"]
                 validSeries = lengthOfSeries >= minimalSeriesLength
@@ -349,8 +376,9 @@ def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, ena
                 measurements = sample_batched["measurements"][:, :maxLengthOfSeries][validSeries]  # [nBatch, nTime, nFeature]
                 measurements_tvec = sample_batched["tVec"][:, :maxLengthOfSeries][validSeries]
                 
-                #  crop measurements for augmentations purpose:
+                #  crop measurements for augmentations purpose:                
                 measurements, measurements_tvec, lengthOfSeries = augCrop(measurements, measurements_tvec, lengthOfSeries, nMinimalSamples, nMaximalSamples)
+                    
                 labels = measurements[:, :, -1][:, :, None].type(torch.int64)
                 filteringLabels = labels[:, 1:]
                 measurements = measurements[:, :, :-1]
@@ -387,27 +415,35 @@ def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, ena
                 
                 validation_loss_singleEpoch += loss.item()
                 
-                correctClassificationFraction = np.zeros(nClasses+1)
+                correctClassification, correctClassification_nSamples, likelihoods = np.zeros(nClasses+1), np.zeros(nClasses+1), np.zeros(nClasses+1)
                 estimations, labels = hat_x_k_plus_1_given_k_flatten[validIndices], filteringLabels_flatten[validIndices, 0]
                 for c in range(nClasses):
                     labelIndices = labels == c
+                    correctClassification_nSamples[c] = labelIndices.sum().item()
                     if labelIndices.sum() > 0:
-                        correctClassificationFraction[c] = ((torch.argmax(estimations[labelIndices], dim=1) == labels[labelIndices]).sum()/labelIndices.sum()).item()
+                        correctClassification[c] = ((torch.argmax(estimations[labelIndices], dim=1) == labels[labelIndices]).sum()).item()                    
+                        likelihoods[c] = np.exp(estimations[labelIndices, c].detach().cpu().numpy()).sum()
                     else:
-                        correctClassificationFraction[c] = 0
+                        correctClassification[c] = 0
                 classesIndices = labels > 0    # 0 is the no class that the filter is not trained on
-                correctClassificationFraction[-1] = ((torch.argmax(estimations[classesIndices], dim=1) == labels[classesIndices]).sum()/classesIndices.sum()).item()
-                correctClassificationFraction = measurements.shape[0]/len(validationLoader.dataset) * correctClassificationFraction
-                validation_correctFraction_singleEpoch = validation_correctFraction_singleEpoch + correctClassificationFraction                                              
-                                        
+                correctClassification[-1] = ((torch.argmax(estimations[classesIndices], dim=1) == labels[classesIndices]).sum()).item()   
+                allEstimations, allLabels = estimations[classesIndices].detach().cpu().numpy(), labels[classesIndices].detach().cpu().numpy()
+                for i in range(allEstimations.shape[0]):
+                    likelihoods[-1] = likelihoods[-1] + np.exp(allEstimations[i, allLabels[i]])
+                correctClassification_nSamples[-1] = classesIndices.sum().item()
+                validation_correctFraction_singleEpoch = validation_correctFraction_singleEpoch + correctClassification
+                validation_likelihood_singleEpoch = validation_likelihood_singleEpoch + likelihoods
+                validation_correctFraction_singleEpoch_nSamples = validation_correctFraction_singleEpoch_nSamples + correctClassification_nSamples                                                                        
             
             validation_loss += validation_loss_singleEpoch/nValidationEpochs
-            validation_correctFraction = validation_correctFraction + validation_correctFraction_singleEpoch/nValidationEpochs
+            validation_correctFraction = validation_correctFraction + np.divide(validation_correctFraction_singleEpoch, validation_correctFraction_singleEpoch_nSamples)/nValidationEpochs
+            validation_likelihoodFraction = validation_likelihoodFraction + np.divide(validation_likelihood_singleEpoch, validation_correctFraction_singleEpoch_nSamples)/nValidationEpochs
         
-        if epoch > patience: scheduler.step(train_loss)
+        if mode == 'train' and epoch > patience: scheduler.step(train_loss)
         # print(f'epoch: {epoch}; Validation Mean error w.r.t mean(abs(labels)) = {valid_loss / len(validationLoader) / combination_mean}; mean error in theta w.r.t mean(theta)= {meanErrorIn_theta}')
         validationLossList.append(validation_loss)
         validationCorrectFractionist.append(validation_correctFraction)
+        validationLikelihoodList.append(validation_likelihoodFraction)
         #currentValidationMeanStd = patientsDataset.calcMeanStd(validationData.indices, combination_ANN)
         #currentTrainMeanStd = patientsDataset.calcMeanStd(trainData.indices, combination_ANN)
         #validationMeanStdList.append(currentValidationMeanStd)
@@ -418,14 +454,17 @@ def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, ena
             #print(f'epoch {epoch}, Validation Mean Std Decreased({previousValidationMeanStd:.6f}--->{currentValidationMeanStd:.6f})')
             print(f'epoch {epoch}, Validation loss Decreased({previousValidationLoss:.6f}--->{validation_loss:.6f})')
             print(f'epoch {epoch}, Validation correct fraction ({np.round(100*previousValidationMeanCorrectFraction)}--->{np.round(100*validation_correctFraction)})')
+            print(f'epoch {epoch}, Validation likelihood ({np.round(100*previousValidationLikelihoodFraction)}--->{np.round(100*validation_likelihoodFraction)})')
             #print(f'epoch {epoch}, Train Mean Std {currentTrainMeanStd:.6f}')
             print(f'epoch {epoch}, Train loss {train_loss:.6f}')
-            print(f'epoch {epoch}, Train correct fraction {np.round(100*train_correctFraction)}')
+            print(f'epoch {epoch}, Train correct fraction {np.round(100*trainCorrectFraction)}')
+            print(f'epoch {epoch}, Train likelihood {np.round(100*trainLikelihoodFractions)}')
             
             #previousValidationMeanStd = currentValidationMeanStd
-        if previousValidationLoss > validation_loss and epoch > patience:
+        if mode == 'train' and previousValidationLoss > validation_loss and epoch > patience:
             previousValidationLoss = validation_loss
             previousValidationMeanCorrectFraction = validation_correctFraction
+            previousValidationLikelihoodFraction = validation_likelihoodFraction
             if enableDataParallel:
                 model_state_dict = stateEst_ANN.module.state_dict().copy()
                 #torch.save(combination_ANN.module.state_dict(), fileName + '_model.pt')
@@ -441,10 +480,18 @@ def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, ena
             print(f'epoch {epoch}, Train loss {train_loss:.6f}')
         '''
 
-
-        if epoch > patience and scheduler._last_lr[-1] < lowThrLr:
+        
+        if mode == 'train' and epoch > patience and scheduler._last_lr[-1] < lowThrLr:
             print(f'Stoping optimization due to learning rate of {scheduler._last_lr[-1]}')
             break  
+        if mode == 'test': 
+            if enableDataParallel:
+                model_state_dict = stateEst_ANN.module.state_dict().copy()
+                #torch.save(combination_ANN.module.state_dict(), fileName + '_model.pt')
+            else:
+                model_state_dict = stateEst_ANN.state_dict().copy()
+            previousValidationLoss = np.inf
+            break
         #if epoch > 9: break
 
     epochVec = np.arange(0, len(validationCorrectFractionist))    
