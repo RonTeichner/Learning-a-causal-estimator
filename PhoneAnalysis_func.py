@@ -33,12 +33,12 @@ class PhoneDataset(Dataset):
         self.metaDataDf, self.phonesDf, self.SigMatFeatureUnits = self.getDataset()
         
         self.nFeatures = len(self.phonesDf.columns[3:].tolist())
-        self.measFillValue = -1e4
+        self.measFillValue = -1e4        
         
         self.measurements, self.measurements_tvec = [torch.from_numpy(i) for i in self.df2SigMat(self.phonesDf)]
         # note that the last feature is the label (the target)
-        self.mu = self.phonesDf.mean(axis=0)[3:-1].to_numpy()[:, None]
-        stdsVec = self.phonesDf.std(axis=0)[3:-1].to_numpy()
+        self.mu = self.phonesDf[self.phonesDf['gt'] > 0].mean(axis=0)[3:-1].to_numpy()[:, None]
+        stdsVec = self.phonesDf[self.phonesDf['gt'] > 0].std(axis=0)[3:-1].to_numpy()
         self.Sigma_minus_half = np.diag(1/stdsVec)
         self.Sigma_half = np.diag(stdsVec)
         
@@ -114,6 +114,42 @@ class PhoneDataset(Dataset):
         return [measuremnts, tVec.to_numpy(dtype='float32')[None, :].repeat(nPatients, axis=0)[:, :, None]]
 
         
+    def plotTimesSeries(self):
+        model = self.metaDataDf['Classification'].unique()[0]
+        devices = self.metaDataDf['Device'].unique().tolist()
+        minClass, maxClass = self.phonesDf['gt'].min()-1, self.phonesDf['gt'].max()+1
+        for device in devices:
+            singleDeviceMetaData = self.metaDataDf[self.metaDataDf['Device'] == device]
+            Ids_included = singleDeviceMetaData['Id'].unique().tolist()
+            for Id in Ids_included:
+                singleLineageDF = self.phonesDf[self.phonesDf['Id'] == Id]
+                singleLineageMetaDataDf = self.metaDataDf[self.metaDataDf['Id'] == Id]
+                user, device = singleLineageMetaDataDf['User'].to_numpy()[0], singleLineageMetaDataDf['Device'].to_numpy()[0]
+                tVecLineage = singleLineageDF['time']
+                plt.figure(figsize=(10,10))
+                plt.suptitle(f'{model}, Id = {Id}, User = {user}, Device = {device}')
+                plt.subplot(3, 1, 1)
+                plt.plot(tVecLineage, singleLineageDF['acc_x'], label='acc_x')
+                plt.plot(tVecLineage, singleLineageDF['acc_y'], label='acc_y')
+                plt.plot(tVecLineage, singleLineageDF['acc_z'], label='acc_z')
+                plt.xlabel('sec')
+                plt.grid()
+                plt.legend()
+                plt.subplot(3, 1, 2)
+                plt.plot(tVecLineage, singleLineageDF['gyr_x'], label='gyr_x')
+                plt.plot(tVecLineage, singleLineageDF['gyr_y'], label='gyr_y')
+                plt.plot(tVecLineage, singleLineageDF['gyr_z'], label='gyr_z')
+                plt.xlabel('sec')
+                plt.grid()
+                plt.legend()
+                plt.subplot(3, 1, 3)
+                plt.plot(tVecLineage, singleLineageDF['gt'])
+                plt.ylim([minClass, maxClass])
+                plt.xlabel('sec')
+                plt.grid()
+                plt.show()
+        
+    
     def __len__(self):
         return self.metaDataDf.shape[0]
         
@@ -138,7 +174,10 @@ def init_weights(m):
 class RNN_Filter(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, num_layers, modelDict):
         super(RNN_Filter, self).__init__()
-        self.input_dim = input_dim
+        if modelDict['useSelectedFeatures']:
+            self.input_dim = len(modelDict['featuresIncludeInTrainIndices'])
+        else:
+            self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
         self.output_dim = output_dim
@@ -146,7 +185,9 @@ class RNN_Filter(nn.Module):
         self.windowSize = 1  # [sec]
         self.windowSize_samples = int(np.round(self.windowSize*self.fs))
         self.windowSize_samples = self.windowSize_samples + (np.mod(self.windowSize_samples, 2) == 0)
-        self.nConv_out_channels = 36
+        self.nConv_out_channels = 64
+        
+        self.bidirectional = modelDict['smoother']
         
         self.trainOnNormalizedData = modelDict['trainOnNormalizedData']
         
@@ -170,10 +211,10 @@ class RNN_Filter(nn.Module):
         self.activation = nn.ReLU()
 
         # setup RNN layer        
-        self.Filter_rnn = nn.LSTM(self.nConv_out_channels, self.hidden_dim, self.num_layers, batch_first=True)
+        self.Filter_rnn = nn.LSTM(input_size=self.nConv_out_channels, hidden_size=self.hidden_dim, num_layers=self.num_layers, bidirectional=self.bidirectional, batch_first=True)
 
         # setup output layer
-        self.linear = nn.Linear(self.hidden_dim, self.output_dim)
+        self.linear = nn.Linear(self.hidden_dim*(1+self.bidirectional), self.output_dim)
         self.logSoftmax = nn.LogSoftmax(dim=-1)
 
     def forward(self, z):
@@ -204,12 +245,8 @@ class RNN_Filter(nn.Module):
 
         return hat_x_k_plus_1_given_k
 
-def augCrop(measurements, measurements_tvec, lengthOfSeries, nMinimalSamples, nMaximalSamples):    
-    nSeries, nTime, nFeature = measurements.shape
-    for s in range(nSeries):
-        if lengthOfSeries[s] < nTime:
-            fillValue = measurements[s, -1, 0].item()
-            break
+def augCrop(measurements, measurements_tvec, lengthOfSeries, nMinimalSamples, nMaximalSamples, fillValue):    
+    nSeries, nTime, nFeature = measurements.shape    
     
     nMaximalSamples = int(np.min([nMaximalSamples,lengthOfSeries.max().item()]))
     
@@ -227,27 +264,30 @@ def augCrop(measurements, measurements_tvec, lengthOfSeries, nMinimalSamples, nM
     
     return measurementsAug, measurements_tvecAug, lengthOfSeriesAug
     
-def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, enableDataParallel, modelDict, enablePlots, mode):    
+def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, enableDataParallel, modelDict, enablePlots, mode, trainOnSmoother=False, smoother_rnn=None):    
     lowThrLr = 1e-5
     nClasses = stateEst_ANN.output_dim
+    fillValue = -1e-4
     if mode == 'train':
         nValidationEpochs = 10  # for averaging the results over many augmentations
         nMinimalSamples = np.floor(10*modelDict['fs'])  # equal to 10 seconds at the sample rate 
         nMaximalSamples = np.floor(30*modelDict['fs'])
     elif mode == 'test':
-        nValidationEpochs = 5#30  # for averaging the results over many augmentations
+        nValidationEpochs = 20  # for averaging the results over many augmentations
         nMinimalSamples = np.floor(10*modelDict['fs'])  # equal to 10 seconds at the sample rate 
         nMaximalSamples = np.floor(30*modelDict['fs'])
     
-    
+    if trainOnSmoother: smoother_rnn.eval()
     # training method:    
     if mode == 'train':
         lr = 0.001
         optimizer = optim.Adam(stateEst_ANN.parameters(), lr=lr, weight_decay=0)
-        patience = 20
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor = 0.1*2, patience=patience, threshold=1e-6)
+        patience = 40
+        #scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor = 0.1*2, patience=patience, threshold=1e-6)
         
-    criterion = nn.NLLLoss(ignore_index=0)  # ignoring the noClass category
+    weights = 1/modelDict['statisticsDict']['classDistribution'][1]
+    weights = torch.tensor(weights/weights.sum(), dtype=torch.float)
+    criterion = nn.NLLLoss(weight=weights, ignore_index=0)  # ignoring the noClass category
     
     # moving model to cuda:    
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")    
@@ -255,8 +295,10 @@ def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, ena
         # print("Let's use", torch.cuda.device_count(), "GPUs!")
         # dim = 0 [30, xxx] -> [10, ...], [10, ...], [10, ...] on 3 GPUs
         stateEst_ANN = nn.DataParallel(stateEst_ANN)    
+        if trainOnSmoother: smoother_rnn = nn.DataParallel(smoother_rnn)    
 
     stateEst_ANN.to(device)
+    if trainOnSmoother: smoother_rnn.to(device)
     criterion.to(device)    
     #model.apply(init_weights)
 
@@ -271,126 +313,50 @@ def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, ena
     while True:
         epoch += 1
         train_loss, train_correct, train_correct_nSamples, train_likelihood = 0.0, np.zeros(nClasses+1), np.zeros(nClasses+1), np.zeros(nClasses+1)
-        if mode == 'train' and epoch > patience and np.mod(epoch, 10) == 0: print(f'training: starting epoch {epoch}; lr = {scheduler._last_lr[-1]}')
+        if mode == 'train' and epoch > patience and np.mod(epoch, 10) == 0: print(f'training: starting epoch {epoch}')
         
         if mode == 'train':
             stateEst_ANN.train()
         elif mode == 'test':
             stateEst_ANN.eval()
-
-        for i_batch, sample_batched in enumerate(trainLoader):
-            # print(f'starting epoch {epoch}, batch {i_batch}')
-            if mode == 'train': optimizer.zero_grad()
-
-            lengthOfSeries = sample_batched["lengthOfSeries"]
-            validSeries = lengthOfSeries >= minimalSeriesLength
-            if not(validSeries.any()): continue
-            lengthOfSeries = lengthOfSeries[validSeries]
-            maxLengthOfSeries = lengthOfSeries.max()
-            measurements = sample_batched["measurements"][:, :maxLengthOfSeries][validSeries]  # [nBatch, nTime, nFeature]            
-            measurements_tvec = sample_batched["tVec"][:, :maxLengthOfSeries][validSeries]
-            
-            #  crop measurements for augmentations purpose:
-            if mode == 'train':
-                measurements, measurements_tvec, lengthOfSeries = augCrop(measurements, measurements_tvec, lengthOfSeries, nMinimalSamples, nMaximalSamples)
-            
-            labels = measurements[:, :, -1][:, :, None].type(torch.int64)
-            filteringLabels = labels[:, 1:]
-            measurements = measurements[:, :, :-1]
-            currentBatchSize = measurements.shape[0]
-            
-            if modelDict['useSelectedFeatures']: measurements = measurements[:, :, modelDict['featuresIncludeInTrainIndices']]                                                
-
-            measurements = measurements.to(device)            
-            lengthOfSeries = lengthOfSeries.to(device)
-            filteringLabels = filteringLabels.to(device)
-            # measurements, funcOfMeas of shape [batchSize, nTime, nFeatures]
-
-            hat_x_k_plus_1_given_k = stateEst_ANN(measurements)
-            hat_x_k_plus_1_given_k = hat_x_k_plus_1_given_k[:, :-1] # filtering
-            nPatients, nTime, _ = hat_x_k_plus_1_given_k.shape
-            # now hat_x_k_plus_1_given_k at [:,k] has the estimation of the state at time [k+1] given measurements up to and including time k
-            # filteringLabels at [:k] has the label of time [k+1]
-            
-            hat_x_k_plus_1_given_k_flatten = torch.flatten(hat_x_k_plus_1_given_k, start_dim=0, end_dim=-2)
-            filteringLabels_flatten = torch.flatten(filteringLabels, start_dim=0, end_dim=-2)
-            # torch.flatten(hat_x_k_plus_1_given_k, start_dim=0, end_dim=-2)[0] - hat_x_k_plus_1_given_k[0,0]
-            # torch.flatten(hat_x_k_plus_1_given_k, start_dim=0, end_dim=-2)[1] - hat_x_k_plus_1_given_k[0,1]
-            # torch.flatten(hat_x_k_plus_1_given_k, start_dim=0, end_dim=-2)[hat_x_k_plus_1_given_k.shape[1]] - hat_x_k_plus_1_given_k[1,0]
-            validIndices = torch.zeros_like(hat_x_k_plus_1_given_k_flatten[:, 0]).bool()
-            for s in range(lengthOfSeries.shape[0]):
-                seriesLength = lengthOfSeries[s] - 1
-                seriesStartIdx = nTime*s
-                seriesStopIdx = seriesStartIdx + seriesLength
-                validIndices[seriesStartIdx : seriesStopIdx] = True
-                                
-            loss = criterion(hat_x_k_plus_1_given_k_flatten[validIndices], filteringLabels_flatten[validIndices, 0])            
-     
-            loss = measurements.shape[0]/len(trainLoader.dataset) * loss
-            
-            if mode == 'train':                        
-                loss.backward()
-                optimizer.step()  # parameter update
-
-            train_loss += loss.item()  
-            
-            correctClassification, likelihoods, correctClassification_nSamples = np.zeros(nClasses+1), np.zeros(nClasses+1), np.zeros(nClasses+1)
-            estimations, labels = hat_x_k_plus_1_given_k_flatten[validIndices], filteringLabels_flatten[validIndices, 0]
-            for c in range(nClasses):
-                labelIndices = labels == c
-                correctClassification_nSamples[c] = labelIndices.sum().item()
-                if labelIndices.sum() > 0:
-                    correctClassification[c] = ((torch.argmax(estimations[labelIndices], dim=1) == labels[labelIndices]).sum()).item()                    
-                    likelihoods[c] = np.exp(estimations[labelIndices, c].detach().cpu().numpy()).sum()
-                else:
-                    correctClassification[c], likelihoods[c] = 0, 0
-            classesIndices = labels > 0    # 0 is the no class that the filter is not trained on
-            correctClassification[-1] = ((torch.argmax(estimations[classesIndices], dim=1) == labels[classesIndices]).sum()).item()   
-            allEstimations, allLabels = estimations[classesIndices].detach().cpu().numpy(), labels[classesIndices].detach().cpu().numpy()
-            for i in range(allEstimations.shape[0]):
-                likelihoods[-1] = likelihoods[-1] + np.exp(allEstimations[i, allLabels[i]])
-            correctClassification_nSamples[-1] = classesIndices.sum().item()
-            train_correct = train_correct + correctClassification
-            train_likelihood = train_likelihood + likelihoods
-            train_correct_nSamples = train_correct_nSamples + correctClassification_nSamples
-
-        #scheduler.step(train_loss)
-        trainLossList.append(train_loss)
-        trainCorrectFraction = np.divide(train_correct, train_correct_nSamples)
-        trainLikelihoodFractions = np.divide(train_likelihood, train_correct_nSamples)
-        trainCorrectFractionist.append(trainCorrectFraction)
-        trainLikelihoodList.append(trainLikelihoodFractions)
-        # print("Outside: measurements size", measurements.size(), "combination size", combination.size())
-
-        validation_loss, validation_correctFraction, validation_likelihoodFraction = 0.0, 0.0, 0.0
-        stateEst_ANN.eval()
-        for validationEpoch in range(nValidationEpochs):
-            if mode == 'test': print(f'startin validation epoch {validationEpoch} out of {nValidationEpochs}')
-            validation_loss_singleEpoch, validation_correctFraction_singleEpoch, validation_likelihood_singleEpoch, validation_correctFraction_singleEpoch_nSamples = 0.0, 0.0, 0.0, 0.0
-            for i_batch, sample_batched in enumerate(validationLoader):
+        
+        if mode == 'train':
+            for i_batch, sample_batched in enumerate(trainLoader):
+                # print(f'starting epoch {epoch}, batch {i_batch}')
+                if mode == 'train': optimizer.zero_grad()
+    
                 lengthOfSeries = sample_batched["lengthOfSeries"]
                 validSeries = lengthOfSeries >= minimalSeriesLength
                 if not(validSeries.any()): continue
                 lengthOfSeries = lengthOfSeries[validSeries]
                 maxLengthOfSeries = lengthOfSeries.max()
-                measurements = sample_batched["measurements"][:, :maxLengthOfSeries][validSeries]  # [nBatch, nTime, nFeature]
+                measurements = sample_batched["measurements"][:, :maxLengthOfSeries][validSeries]  # [nBatch, nTime, nFeature]            
                 measurements_tvec = sample_batched["tVec"][:, :maxLengthOfSeries][validSeries]
                 
                 #  crop measurements for augmentations purpose:                
-                measurements, measurements_tvec, lengthOfSeries = augCrop(measurements, measurements_tvec, lengthOfSeries, nMinimalSamples, nMaximalSamples)
+                measurements, measurements_tvec, lengthOfSeries = augCrop(measurements, measurements_tvec, lengthOfSeries, nMinimalSamples, nMaximalSamples, fillValue)
+                
+                if not(trainOnSmoother):
+                    labels = measurements[:, :, -1][:, :, None].type(torch.int64)
+                    filteringLabels = labels[:, 1:]
                     
-                labels = measurements[:, :, -1][:, :, None].type(torch.int64)
-                filteringLabels = labels[:, 1:]
                 measurements = measurements[:, :, :-1]
                 currentBatchSize = measurements.shape[0]
                 
-                if modelDict['useSelectedFeatures']: measurements = measurements[:, :, modelDict['featuresIncludeInTrainIndices']]                                                
-
+                if modelDict['useSelectedFeatures']: measurements = measurements[:, :, modelDict['featuresIncludeInTrainIndices']]      
+                
                 measurements = measurements.to(device)            
                 lengthOfSeries = lengthOfSeries.to(device)
-                filteringLabels = filteringLabels.to(device)
+                
+                if trainOnSmoother:
+                    hat_x_k_plus_1_given_N = smoother_rnn(measurements)          
+                    # now hat_x_k_plus_1_given_N at [:,k] has the estimation of the state at time [k+1] given measurements up to and including time N-1                               
+                    hat_x_k_plus_1_given_N = hat_x_k_plus_1_given_N[:, :-1]
+                    filteringLabels = torch.argmax(hat_x_k_plus_1_given_N, dim=2).unsqueeze(2).detach()
+                else:
+                    filteringLabels = filteringLabels.to(device)
                 # measurements, funcOfMeas of shape [batchSize, nTime, nFeatures]
-
+    
                 hat_x_k_plus_1_given_k = stateEst_ANN(measurements)
                 hat_x_k_plus_1_given_k = hat_x_k_plus_1_given_k[:, :-1] # filtering
                 nPatients, nTime, _ = hat_x_k_plus_1_given_k.shape
@@ -413,9 +379,13 @@ def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, ena
          
                 loss = measurements.shape[0]/len(trainLoader.dataset) * loss
                 
-                validation_loss_singleEpoch += loss.item()
+                if mode == 'train':                        
+                    loss.backward()
+                    optimizer.step()  # parameter update
+    
+                train_loss += loss.item()  
                 
-                correctClassification, correctClassification_nSamples, likelihoods = np.zeros(nClasses+1), np.zeros(nClasses+1), np.zeros(nClasses+1)
+                correctClassification, likelihoods, correctClassification_nSamples = np.zeros(nClasses+1), np.zeros(nClasses+1), np.zeros(nClasses+1)
                 estimations, labels = hat_x_k_plus_1_given_k_flatten[validIndices], filteringLabels_flatten[validIndices, 0]
                 for c in range(nClasses):
                     labelIndices = labels == c
@@ -424,8 +394,139 @@ def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, ena
                         correctClassification[c] = ((torch.argmax(estimations[labelIndices], dim=1) == labels[labelIndices]).sum()).item()                    
                         likelihoods[c] = np.exp(estimations[labelIndices, c].detach().cpu().numpy()).sum()
                     else:
+                        correctClassification[c], likelihoods[c] = 0, 0
+                classesIndices = labels > 0#-1   # 0 is the no class that the filter is not trained on
+                correctClassification[-1] = ((torch.argmax(estimations[classesIndices], dim=1) == labels[classesIndices]).sum()).item()   
+                allEstimations, allLabels = estimations[classesIndices].detach().cpu().numpy(), labels[classesIndices].detach().cpu().numpy()
+                for i in range(allEstimations.shape[0]):
+                    likelihoods[-1] = likelihoods[-1] + np.exp(allEstimations[i, allLabels[i]])
+                correctClassification_nSamples[-1] = classesIndices.sum().item()
+                train_correct = train_correct + correctClassification
+                train_likelihood = train_likelihood + likelihoods
+                train_correct_nSamples = train_correct_nSamples + correctClassification_nSamples
+    
+            #scheduler.step(train_loss)
+            trainLossList.append(train_loss)
+            tIndices = train_correct_nSamples > 0
+            trainCorrectFraction, trainLikelihoodFractions = np.zeros(nClasses+1), np.zeros(nClasses+1)
+            trainCorrectFraction[tIndices] = np.divide(train_correct[tIndices], train_correct_nSamples[tIndices])
+            trainLikelihoodFractions[tIndices] = np.divide(train_likelihood[tIndices], train_correct_nSamples[tIndices])
+            trainCorrectFractionist.append(trainCorrectFraction)
+            trainLikelihoodList.append(trainLikelihoodFractions)
+            # print("Outside: measurements size", measurements.size(), "combination size", combination.size())
+
+        validation_loss, validation_correctFraction, validation_likelihoodFraction = 0.0, np.zeros(nClasses+1), np.zeros(nClasses+1)
+        stateEst_ANN.eval()
+        meanCorrect_vsTime, meanLikelihood_vsTime, meanLikelihood_vsTime_nSamples = np.zeros(int(10*modelDict['fs'])), np.zeros(int(10*modelDict['fs'])), np.zeros(int(10*modelDict['fs']))
+        meanLikelihood_tVec = (1 + np.arange(meanLikelihood_vsTime.shape[0])) / modelDict['fs']
+        for validationEpoch in range(nValidationEpochs):
+            if mode == 'test': print(f'starting validation epoch {validationEpoch} out of {nValidationEpochs}')
+            validation_loss_singleEpoch, validation_correctFraction_singleEpoch, validation_likelihood_singleEpoch, validation_correctFraction_singleEpoch_nSamples = 0.0, 0.0, 0.0, 0.0
+            for i_batch, sample_batched in enumerate(validationLoader):
+                lengthOfSeries = sample_batched["lengthOfSeries"]
+                validSeries = lengthOfSeries >= minimalSeriesLength
+                if not(validSeries.any()): continue
+                lengthOfSeries = lengthOfSeries[validSeries]
+                maxLengthOfSeries = lengthOfSeries.max()
+                measurements = sample_batched["measurements"][:, :maxLengthOfSeries][validSeries]  # [nBatch, nTime, nFeature]
+                measurements_tvec = sample_batched["tVec"][:, :maxLengthOfSeries][validSeries]
+                
+                #  crop measurements for augmentations purpose:                
+                measurements, measurements_tvec, lengthOfSeries = augCrop(measurements, measurements_tvec, lengthOfSeries, nMinimalSamples, nMaximalSamples, fillValue)
+                    
+                if not(trainOnSmoother):
+                    labels = measurements[:, :, -1][:, :, None].type(torch.int64)
+                    filteringLabels = labels[:, 1:]
+                    
+                measurements = measurements[:, :, :-1]
+                currentBatchSize = measurements.shape[0]
+                
+                if modelDict['useSelectedFeatures']: measurements = measurements[:, :, modelDict['featuresIncludeInTrainIndices']]                                                
+
+                measurements = measurements.to(device)            
+                lengthOfSeries = lengthOfSeries.to(device)
+                
+                if trainOnSmoother:
+                    hat_x_k_plus_1_given_N = smoother_rnn(measurements)          
+                    # now hat_x_k_plus_1_given_N at [:,k] has the estimation of the state at time [k+1] given measurements up to and including time N-1                               
+                    hat_x_k_plus_1_given_N = hat_x_k_plus_1_given_N[:, :-1]
+                    filteringLabels = torch.argmax(hat_x_k_plus_1_given_N, dim=2).unsqueeze(2).detach()
+                else:
+                    filteringLabels = filteringLabels.to(device)
+                # measurements, funcOfMeas of shape [batchSize, nTime, nFeatures]
+
+                hat_x_k_plus_1_given_k = stateEst_ANN(measurements)
+                hat_x_k_plus_1_given_k = hat_x_k_plus_1_given_k[:, :-1] # filtering
+                nPatients, nTime, _ = hat_x_k_plus_1_given_k.shape
+                # now hat_x_k_plus_1_given_k at [:,k] has the estimation of the state at time [k+1] given measurements up to and including time k
+                # filteringLabels at [:k] has the label of time [k+1]
+                
+                hat_x_k_plus_1_given_k_flatten = torch.flatten(hat_x_k_plus_1_given_k, start_dim=0, end_dim=-2)
+                filteringLabels_flatten = torch.flatten(filteringLabels, start_dim=0, end_dim=-2)
+                # torch.flatten(hat_x_k_plus_1_given_k, start_dim=0, end_dim=-2)[0] - hat_x_k_plus_1_given_k[0,0]
+                # torch.flatten(hat_x_k_plus_1_given_k, start_dim=0, end_dim=-2)[1] - hat_x_k_plus_1_given_k[0,1]
+                # torch.flatten(hat_x_k_plus_1_given_k, start_dim=0, end_dim=-2)[hat_x_k_plus_1_given_k.shape[1]] - hat_x_k_plus_1_given_k[1,0]
+                validIndices = torch.zeros_like(hat_x_k_plus_1_given_k_flatten[:, 0]).bool()
+                if mode == 'test': 
+                    newStateStartIndices = torch.zeros_like(hat_x_k_plus_1_given_k_flatten[:, 0]).bool()
+                    timeFromStateStart = torch.zeros_like(hat_x_k_plus_1_given_k_flatten[:, 0], dtype=torch.int64)  # [samples]
+                    singleOne = torch.ones(1, dtype=torch.int64, device=hat_x_k_plus_1_given_k_flatten.device)
+                for s in range(lengthOfSeries.shape[0]):
+                    seriesLength = lengthOfSeries[s] - 1
+                    seriesStartIdx = nTime*s
+                    seriesStopIdx = seriesStartIdx + seriesLength
+                    validIndices[seriesStartIdx : seriesStopIdx] = True
+                    
+                    if mode == 'test':
+                        startOfStateIndices = (seriesStartIdx + torch.nonzero(torch.diff(filteringLabels_flatten[seriesStartIdx : seriesStopIdx][:, 0], dim=0))+1)[:, 0]
+                        startOfStateIndices = torch.cat((seriesStartIdx*singleOne, startOfStateIndices), dim=0)                                                
+                        newStateStartIndices[startOfStateIndices] = True
+                        for i in range(startOfStateIndices.shape[0]):
+                            timeFromStateStart[startOfStateIndices[i]:seriesStopIdx] = 1 + torch.arange(seriesStopIdx-startOfStateIndices[i])
+                        
+                                    
+                loss = criterion(hat_x_k_plus_1_given_k_flatten[validIndices], filteringLabels_flatten[validIndices, 0])            
+         
+                loss = measurements.shape[0]/len(validationLoader.dataset) * loss
+                
+                validation_loss_singleEpoch += loss.item()
+                
+                correctClassification, correctClassification_nSamples, likelihoods = np.zeros(nClasses+1), np.zeros(nClasses+1), np.zeros(nClasses+1)
+                estimations, labels = hat_x_k_plus_1_given_k_flatten[validIndices], filteringLabels_flatten[validIndices, 0]
+                if mode == 'test': 
+                    likelihoods_flatten = np.exp(estimations[range(estimations.shape[0]), labels].detach().cpu().numpy())
+                    correct_flatten = torch.argmax(estimations, dim=1) == labels
+                    '''
+                    likelihoods_flatten_normalized = likelihoods_flatten
+                    currentWeights, currentWeightsValidIndices = np.zeros(nClasses), np.zeros(nClasses, dtype=bool)
+                    for c in range(nClasses):
+                        labelIndices = (labels == c).detach().cpu().numpy()
+                        if labelIndices.any():
+                            currentWeights[c] = labelIndices.sum()/labels.shape[0]
+                            currentWeightsValidIndices[c] = True
+                    currentWeights[currentWeightsValidIndices] = 1/currentWeights[currentWeightsValidIndices]
+                    currentWeights[currentWeightsValidIndices] = currentWeights[currentWeightsValidIndices]/currentWeights[currentWeightsValidIndices].sum()
+                    for c in range(nClasses):
+                        labelIndices = (labels == c).detach().cpu().numpy()                        
+                        likelihoods_flatten_normalized[labelIndices] = nClasses*currentWeights[c]*likelihoods_flatten_normalized[labelIndices]
+                    '''
+                    timeFromStateStart = timeFromStateStart.detach().cpu().numpy()  # [samples]
+                    validIndices = validIndices.detach().cpu().numpy()
+                    for t in range(meanLikelihood_vsTime.shape[0]):
+                        specificTimeIndices = np.logical_and(timeFromStateStart == t+1, validIndices)[validIndices]
+                        meanLikelihood_vsTime[t] = meanLikelihood_vsTime[t] + likelihoods_flatten[specificTimeIndices].sum()
+                        meanCorrect_vsTime[t] = meanCorrect_vsTime[t] + correct_flatten[specificTimeIndices].sum()
+                        meanLikelihood_vsTime_nSamples[t] = meanLikelihood_vsTime_nSamples[t] + specificTimeIndices.sum()
+                    
+                for c in range(nClasses):
+                    labelIndices = labels == c
+                    correctClassification_nSamples[c] = labelIndices.sum().item()
+                    if labelIndices.sum() > 0:
+                        correctClassification[c] = ((torch.argmax(estimations[labelIndices], dim=1) == labels[labelIndices]).sum()).item()                    
+                        likelihoods[c] = np.exp(estimations[labelIndices, c].detach().cpu().numpy()).sum()
+                    else:
                         correctClassification[c] = 0
-                classesIndices = labels > 0    # 0 is the no class that the filter is not trained on
+                classesIndices = labels > 0#-1    # 0 is the no class that the filter is not trained on
                 correctClassification[-1] = ((torch.argmax(estimations[classesIndices], dim=1) == labels[classesIndices]).sum()).item()   
                 allEstimations, allLabels = estimations[classesIndices].detach().cpu().numpy(), labels[classesIndices].detach().cpu().numpy()
                 for i in range(allEstimations.shape[0]):
@@ -436,10 +537,11 @@ def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, ena
                 validation_correctFraction_singleEpoch_nSamples = validation_correctFraction_singleEpoch_nSamples + correctClassification_nSamples                                                                        
             
             validation_loss += validation_loss_singleEpoch/nValidationEpochs
-            validation_correctFraction = validation_correctFraction + np.divide(validation_correctFraction_singleEpoch, validation_correctFraction_singleEpoch_nSamples)/nValidationEpochs
-            validation_likelihoodFraction = validation_likelihoodFraction + np.divide(validation_likelihood_singleEpoch, validation_correctFraction_singleEpoch_nSamples)/nValidationEpochs
+            vIndices = validation_correctFraction_singleEpoch_nSamples > 0
+            validation_correctFraction[vIndices] = validation_correctFraction[vIndices] + np.divide(validation_correctFraction_singleEpoch[vIndices], validation_correctFraction_singleEpoch_nSamples[vIndices])/nValidationEpochs
+            validation_likelihoodFraction[vIndices] = validation_likelihoodFraction[vIndices] + np.divide(validation_likelihood_singleEpoch[vIndices], validation_correctFraction_singleEpoch_nSamples[vIndices])/nValidationEpochs
         
-        if mode == 'train' and epoch > patience: scheduler.step(train_loss)
+        #if mode == 'train' and epoch > patience: scheduler.step(train_loss)
         # print(f'epoch: {epoch}; Validation Mean error w.r.t mean(abs(labels)) = {valid_loss / len(validationLoader) / combination_mean}; mean error in theta w.r.t mean(theta)= {meanErrorIn_theta}')
         validationLossList.append(validation_loss)
         validationCorrectFractionist.append(validation_correctFraction)
@@ -456,9 +558,10 @@ def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, ena
             print(f'epoch {epoch}, Validation correct fraction ({np.round(100*previousValidationMeanCorrectFraction)}--->{np.round(100*validation_correctFraction)})')
             print(f'epoch {epoch}, Validation likelihood ({np.round(100*previousValidationLikelihoodFraction)}--->{np.round(100*validation_likelihoodFraction)})')
             #print(f'epoch {epoch}, Train Mean Std {currentTrainMeanStd:.6f}')
-            print(f'epoch {epoch}, Train loss {train_loss:.6f}')
-            print(f'epoch {epoch}, Train correct fraction {np.round(100*trainCorrectFraction)}')
-            print(f'epoch {epoch}, Train likelihood {np.round(100*trainLikelihoodFractions)}')
+            if mode == 'train':
+                print(f'epoch {epoch}, Train loss {train_loss:.6f}')
+                print(f'epoch {epoch}, Train correct fraction {np.round(100*trainCorrectFraction)}')
+                print(f'epoch {epoch}, Train likelihood {np.round(100*trainLikelihoodFractions)}')
             
             #previousValidationMeanStd = currentValidationMeanStd
         if mode == 'train' and previousValidationLoss > validation_loss and epoch > patience:
@@ -481,8 +584,8 @@ def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, ena
         '''
 
         
-        if mode == 'train' and epoch > patience and scheduler._last_lr[-1] < lowThrLr:
-            print(f'Stoping optimization due to learning rate of {scheduler._last_lr[-1]}')
+        if mode == 'train' and epoch > patience and np.min(validationLossList[-patience:]) >= validationLossList[-patience-1]:
+            print(f'Stoping optimization due to zero improvement in validation loss')
             break  
         if mode == 'test': 
             if enableDataParallel:
@@ -534,4 +637,9 @@ def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, ena
             plt.grid()
             plt.show()
         
-    return model_state_dict, previousValidationLoss
+    if mode == 'test':
+        meanLikelihood_vsTime_tuple = (np.divide(meanLikelihood_vsTime, meanLikelihood_vsTime_nSamples), meanLikelihood_tVec, np.divide(meanCorrect_vsTime, meanLikelihood_vsTime_nSamples))
+    else:
+        meanLikelihood_vsTime_tuple = None
+        
+    return model_state_dict, previousValidationLoss, meanLikelihood_vsTime_tuple
