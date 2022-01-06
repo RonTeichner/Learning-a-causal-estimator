@@ -276,7 +276,7 @@ def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, ena
         nMinimalSamples = np.floor(10*modelDict['fs'])  # equal to 10 seconds at the sample rate 
         nMaximalSamples = np.floor(30*modelDict['fs'])
     elif mode == 'test':
-        nValidationEpochs = 20  # for averaging the results over many augmentations
+        nValidationEpochs = 50  # for averaging the results over many augmentations
         nMinimalSamples = np.floor(10*modelDict['fs'])  # equal to 10 seconds at the sample rate 
         nMaximalSamples = np.floor(30*modelDict['fs'])
     

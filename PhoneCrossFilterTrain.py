@@ -134,6 +134,7 @@ if enableTrain:
             
 if enableTest:
     enableDataParallel = False
+    resultList = list()
     for phoneAnalysisFileNameTestData, phoneSavedFilterFileName in zip(phoneAnalysisFileNamesTrainData, phoneSavedFilterFileNames):
         # load phone's dataset and dedicated filter for reference performance
         print(f'creating test dataset, filename {phoneAnalysisFileNameTestData}')
@@ -236,6 +237,11 @@ if enableTest:
             plt.grid()
             plt.legend()
             plt.show()
+            
+            resultDict = {'testedPhone': phoneAnalysisFileNameTestData, 'estimatorPhone': smootherPhoneModel, 'dedicatedFilter': dedicatedFilter_meanLikelihood_vsTime_tuple, 'nonDedicatedFilter': nonDedicatedFilter_meanLikelihood_vsTime_tuple, 'nonDedicatedSmoother': nonDedicatedSmoother_meanLikelihood_vsTime_tuple, 'learnedFilter': improvedFilter_meanLikelihood_vsTime_tuple}
+            resultList.append(resultDict)
+
+    pickle.dump(resultDict, open('allResults.pt', 'wb'))
             
             
             
