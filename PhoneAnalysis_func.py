@@ -187,7 +187,10 @@ class RNN_Filter(nn.Module):
         self.windowSize_samples = self.windowSize_samples + (np.mod(self.windowSize_samples, 2) == 0)
         self.nConv_out_channels = 64
         
-        self.bidirectional = modelDict['smoother']
+        if 'smoother' in modelDict.keys():
+            self.bidirectional = modelDict['smoother']
+        else:
+            self.bidirectional = False
         
         self.trainOnNormalizedData = modelDict['trainOnNormalizedData']
         
