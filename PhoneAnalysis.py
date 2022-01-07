@@ -18,9 +18,9 @@ import copy
 from PhoneAnalysis_func import *
 
 
-createPhoneDataset = False
+createPhoneDataset = True
 enableTrain = False
-enableTest = True
+enableTest = False
 enableOverwriteStatistics = False
 
 enableSmoothing = True
