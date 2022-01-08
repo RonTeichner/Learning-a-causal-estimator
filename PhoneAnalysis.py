@@ -18,16 +18,16 @@ import copy
 from PhoneAnalysis_func import *
 
 
-createPhoneDataset = True
-enableTrain = False
+createPhoneDataset = False
+enableTrain = True
 enableTest = False
 enableOverwriteStatistics = False
 
-enableSmoothing = True
+enableSmoothing = False
 
 enablePlotTimeSeries = False
 
-phoneAnalysisFileNamesTrainData = ['nexus4', 's3', 's3mini', 'samsungold', 'lgwatch']
+phoneAnalysisFileNamesTrainData = ['nexus4', 's3mini', 'samsungold', 'lgwatch']
 phoneAnalysisFileNameTestDataFiles = ['nexus4', 's3', 's3mini', 'samsungold', 'lgwatch', 'gear']  #['nexus4', 's3', 's3mini', 'samsungold', 'lgwatch', 'gear']  # {'s3', 'train_nexus4', 'lgwatch', 'gear'}
 #phoneSavedModelFileNames = ['trainedOns3', 'trainedOns3mini'] # {'trainedOnNexus4', 'trainedOnLgWatch', 'trainedOnsamsungold', 'trainedOns3', 'trainedOns3mini' }
 if enableSmoothing:
@@ -53,7 +53,7 @@ if createPhoneDataset:
         pickle.dump(phoneCompleteDataset, open(phoneAnalysisFileNameTrainData + '_dataset.pt', 'wb'))
     
 if enablePlotTimeSeries:
-    phoneAnalysisFileNameTrainData = phoneAnalysisFileNamesTrainData[0]
+    phoneAnalysisFileNameTrainData = phoneAnalysisFileNamesTrainData[-1]
     phoneCompleteDataset = pickle.load(open(phoneAnalysisFileNameTrainData + '_dataset.pt', 'rb'))
     phoneCompleteDataset.plotTimesSeries()
     
@@ -76,7 +76,7 @@ if enableTrain:
         
         # training properties:    
         trainOnNormalizedData = True    
-        nTrainsForCrossValidation = 1
+        nTrainsForCrossValidation = 1 
         nTrainsOnSameSplit = 1 # not more than 1 because train indices will not match
         batchSize = 8*10
         validation_fraction = 0.3

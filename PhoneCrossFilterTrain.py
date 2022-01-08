@@ -23,7 +23,7 @@ enableTest = True
 enableOverwriteStatistics = False
 
 
-phoneAnalysisFileNamesTrainData = ['nexus4', 's3', 's3mini', 'samsungold', 'lgwatch']
+phoneAnalysisFileNamesTrainData = ['nexus4', 's3', 's3mini', 'samsungold']  #, 'lgwatch']
 phoneSavedSmootherFileNames = ['smoother_trainedOn_' + phoneAnalysisFileNameTrainData for phoneAnalysisFileNameTrainData in phoneAnalysisFileNamesTrainData]
 phoneSavedImprovedFilterFileNames = ['improvedFilterFor_' + phoneAnalysisFileNameTrainData + '_trainedOnSmootherOf_' + SphoneAnalysisFileNameTrainData for phoneAnalysisFileNameTrainData in phoneAnalysisFileNamesTrainData for SphoneAnalysisFileNameTrainData in phoneAnalysisFileNamesTrainData]
 
@@ -135,7 +135,8 @@ if enableTrain:
 if enableTest:
     enableDataParallel = False
     resultList = list()
-    for phoneAnalysisFileNameTestData, phoneSavedFilterFileName in zip(phoneAnalysisFileNamesTrainData, phoneSavedFilterFileNames):
+    for phoneAnalysisFileNameTestData, phoneSavedFilterFileName, phoneSavedSmootherFileName in zip(phoneAnalysisFileNamesTrainData, phoneSavedFilterFileNames, phoneSavedSmootherFileNames):
+        #if not(phoneAnalysisFileNameTestData == 's3'): continue
         # load phone's dataset and dedicated filter for reference performance
         print(f'creating test dataset, filename {phoneAnalysisFileNameTestData}')
         phoneCompleteDataset = pickle.load(open(phoneAnalysisFileNameTestData + '_dataset.pt', 'rb'))    
@@ -158,7 +159,26 @@ if enableTest:
         print(f'starting test of {phoneAnalysisFileNameTestData} on model {phoneSavedFilterFileName}')
         _, _, dedicatedFilter_meanLikelihood_vsTime_tuple = trainModel(dedicatedFilter_rnn, dedicatedFilter_trainLoader, dedicatedFilter_validationLoader, phoneCompleteDataset, enableDataParallel, dedicatedFilterModelDict, True, 'test')
         
+        
+        dedicatedSmootherModelDict = pickle.load(open(phoneSavedSmootherFileName + '_modelDict.pt', 'rb'))
+        if dedicatedSmootherModelDict['datasetFile'] == phoneAnalysisFileNameTestData + '_dataset.pt':
+            dedicatedSmoother_trainData = Subset(phoneCompleteDataset, dedicatedSmootherModelDict['trainIndices'])        
+            dedicatedSmoother_validationData = Subset(phoneCompleteDataset, dedicatedSmootherModelDict['validationIndices'])        
+        else:
+            dedicatedSmoother_trainData, dedicatedSmoother_validationData = phoneCompleteDataset, phoneCompleteDataset
+            assert False,'this should not happen'
+        
+        dedicatedSmoother_trainLoader = DataLoader(dedicatedSmoother_trainData, batch_size=20, shuffle=True, num_workers=0)     
+        dedicatedSmoother_validationLoader = DataLoader(dedicatedSmoother_validationData, batch_size=20*8, shuffle=True, num_workers=0)                 
+        
+        dedicatedSmoother_rnn = RNN_Filter(input_dim = len(dedicatedSmootherModelDict['allFeatures']), hidden_dim=dedicatedSmootherModelDict['hidden_dim'], output_dim=dedicatedSmootherModelDict['nClasses'], num_layers=dedicatedSmootherModelDict['num_layers'], modelDict=dedicatedSmootherModelDict)
+        dedicatedSmoother_rnn.load_state_dict(torch.load(phoneSavedSmootherFileName  + '_model.pt'))
+        
+        print(f'starting test of {phoneAnalysisFileNameTestData} on model {phoneSavedSmootherFileName}')
+        _, _, dedicatedSmoother_meanLikelihood_vsTime_tuple = trainModel(dedicatedSmoother_rnn, dedicatedSmoother_trainLoader, dedicatedSmoother_validationLoader, phoneCompleteDataset, enableDataParallel, dedicatedSmootherModelDict, True, 'test')
+        
         for smootherPhoneModel, nonDedicatedFilterFileName, nonDedicatedSmootherFileName in zip(phoneAnalysisFileNamesTrainData, phoneSavedFilterFileNames, phoneSavedSmootherFileNames):
+            #if not(smootherPhoneModel == 'nexus4'): continue
             if smootherPhoneModel == phoneAnalysisFileNameTestData: continue
             improvedFilterFileName = 'improvedFilterFor_' + phoneAnalysisFileNameTestData + '_trainedOnSmootherOf_' + smootherPhoneModel
             
@@ -221,7 +241,10 @@ if enableTest:
             
             # plots:
             resTuple=dedicatedFilter_meanLikelihood_vsTime_tuple
-            plt.plot(resTuple[1], resTuple[0], label='dedicated ' + phoneAnalysisFileNameTestData + ' filter')
+            plt.plot(resTuple[1], resTuple[0], label=phoneAnalysisFileNameTestData + ' on ' + phoneAnalysisFileNameTestData + ' filter')
+            
+            resTuple=dedicatedSmoother_meanLikelihood_vsTime_tuple            
+            plt.plot(resTuple[1], resTuple[0], label=phoneAnalysisFileNameTestData + ' on ' + phoneAnalysisFileNameTestData + ' smoother')
             
             resTuple=nonDedicatedFilter_meanLikelihood_vsTime_tuple
             plt.plot(resTuple[1], resTuple[0], label=phoneAnalysisFileNameTestData + ' on ' + smootherPhoneModel + ' filter')
@@ -238,7 +261,7 @@ if enableTest:
             plt.legend()
             plt.show()
             
-            resultDict = {'testedPhone': phoneAnalysisFileNameTestData, 'estimatorPhone': smootherPhoneModel, 'dedicatedFilter': dedicatedFilter_meanLikelihood_vsTime_tuple, 'nonDedicatedFilter': nonDedicatedFilter_meanLikelihood_vsTime_tuple, 'nonDedicatedSmoother': nonDedicatedSmoother_meanLikelihood_vsTime_tuple, 'learnedFilter': improvedFilter_meanLikelihood_vsTime_tuple}
+            resultDict = {'testedPhone': phoneAnalysisFileNameTestData, 'estimatorPhone': smootherPhoneModel, 'dedicatedFilter': dedicatedFilter_meanLikelihood_vsTime_tuple, 'dedicatedSmoother': dedicatedSmoother_meanLikelihood_vsTime_tuple, 'nonDedicatedFilter': nonDedicatedFilter_meanLikelihood_vsTime_tuple, 'nonDedicatedSmoother': nonDedicatedSmoother_meanLikelihood_vsTime_tuple, 'learnedFilter': improvedFilter_meanLikelihood_vsTime_tuple}
             resultList.append(resultDict)
 
     pickle.dump(resultDict, open('allResults.pt', 'wb'))

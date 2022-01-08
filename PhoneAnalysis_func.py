@@ -276,7 +276,7 @@ def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, ena
         nMinimalSamples = np.floor(10*modelDict['fs'])  # equal to 10 seconds at the sample rate 
         nMaximalSamples = np.floor(30*modelDict['fs'])
     elif mode == 'test':
-        nValidationEpochs = 50  # for averaging the results over many augmentations
+        nValidationEpochs = 25  # for averaging the results over many augmentations
         nMinimalSamples = np.floor(10*modelDict['fs'])  # equal to 10 seconds at the sample rate 
         nMaximalSamples = np.floor(30*modelDict['fs'])
     
@@ -339,9 +339,12 @@ def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, ena
                 #  crop measurements for augmentations purpose:                
                 measurements, measurements_tvec, lengthOfSeries = augCrop(measurements, measurements_tvec, lengthOfSeries, nMinimalSamples, nMaximalSamples, fillValue)
                 
-                if not(trainOnSmoother):
-                    labels = measurements[:, :, -1][:, :, None].type(torch.int64)
-                    filteringLabels = labels[:, 1:]
+                #if not(trainOnSmoother):
+                labels = measurements[:, :, -1][:, :, None].type(torch.int64)
+                filteringLabels = labels[:, 1:]
+                if trainOnSmoother:
+                    DefinedClassIndices = filteringLabels > 0
+                    DefinedClassIndices = DefinedClassIndices.to(device)
                     
                 measurements = measurements[:, :, :-1]
                 currentBatchSize = measurements.shape[0]
@@ -368,6 +371,7 @@ def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, ena
                 
                 hat_x_k_plus_1_given_k_flatten = torch.flatten(hat_x_k_plus_1_given_k, start_dim=0, end_dim=-2)
                 filteringLabels_flatten = torch.flatten(filteringLabels, start_dim=0, end_dim=-2)
+                if trainOnSmoother: DefinedClassIndices_flatten = torch.flatten(DefinedClassIndices, start_dim=0, end_dim=-2)
                 # torch.flatten(hat_x_k_plus_1_given_k, start_dim=0, end_dim=-2)[0] - hat_x_k_plus_1_given_k[0,0]
                 # torch.flatten(hat_x_k_plus_1_given_k, start_dim=0, end_dim=-2)[1] - hat_x_k_plus_1_given_k[0,1]
                 # torch.flatten(hat_x_k_plus_1_given_k, start_dim=0, end_dim=-2)[hat_x_k_plus_1_given_k.shape[1]] - hat_x_k_plus_1_given_k[1,0]
@@ -377,6 +381,8 @@ def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, ena
                     seriesStartIdx = nTime*s
                     seriesStopIdx = seriesStartIdx + seriesLength
                     validIndices[seriesStartIdx : seriesStopIdx] = True
+                    
+                if trainOnSmoother: validIndices = torch.logical_and(validIndices, DefinedClassIndices_flatten[:, 0])
                                     
                 loss = criterion(hat_x_k_plus_1_given_k_flatten[validIndices], filteringLabels_flatten[validIndices, 0])            
          
@@ -437,9 +443,12 @@ def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, ena
                 #  crop measurements for augmentations purpose:                
                 measurements, measurements_tvec, lengthOfSeries = augCrop(measurements, measurements_tvec, lengthOfSeries, nMinimalSamples, nMaximalSamples, fillValue)
                     
-                if not(trainOnSmoother):
-                    labels = measurements[:, :, -1][:, :, None].type(torch.int64)
-                    filteringLabels = labels[:, 1:]
+                #if not(trainOnSmoother):
+                labels = measurements[:, :, -1][:, :, None].type(torch.int64)
+                filteringLabels = labels[:, 1:]
+                if trainOnSmoother:
+                    DefinedClassIndices = filteringLabels > 0
+                    DefinedClassIndices = DefinedClassIndices.to(device)
                     
                 measurements = measurements[:, :, :-1]
                 currentBatchSize = measurements.shape[0]
@@ -466,6 +475,7 @@ def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, ena
                 
                 hat_x_k_plus_1_given_k_flatten = torch.flatten(hat_x_k_plus_1_given_k, start_dim=0, end_dim=-2)
                 filteringLabels_flatten = torch.flatten(filteringLabels, start_dim=0, end_dim=-2)
+                if trainOnSmoother: DefinedClassIndices_flatten = torch.flatten(DefinedClassIndices, start_dim=0, end_dim=-2)
                 # torch.flatten(hat_x_k_plus_1_given_k, start_dim=0, end_dim=-2)[0] - hat_x_k_plus_1_given_k[0,0]
                 # torch.flatten(hat_x_k_plus_1_given_k, start_dim=0, end_dim=-2)[1] - hat_x_k_plus_1_given_k[0,1]
                 # torch.flatten(hat_x_k_plus_1_given_k, start_dim=0, end_dim=-2)[hat_x_k_plus_1_given_k.shape[1]] - hat_x_k_plus_1_given_k[1,0]
@@ -487,7 +497,7 @@ def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, ena
                         for i in range(startOfStateIndices.shape[0]):
                             timeFromStateStart[startOfStateIndices[i]:seriesStopIdx] = 1 + torch.arange(seriesStopIdx-startOfStateIndices[i])
                         
-                                    
+                if trainOnSmoother: validIndices = torch.logical_and(validIndices, DefinedClassIndices_flatten[:, 0])                    
                 loss = criterion(hat_x_k_plus_1_given_k_flatten[validIndices], filteringLabels_flatten[validIndices, 0])            
          
                 loss = measurements.shape[0]/len(validationLoader.dataset) * loss
