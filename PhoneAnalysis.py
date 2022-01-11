@@ -24,7 +24,7 @@ enableSparse = True
 enableTest = False
 enableOverwriteStatistics = False
 
-enableSmoothing = False
+enableSmoothing = True
 
 enablePlotTimeSeries = False
 
@@ -83,7 +83,7 @@ if enableTrain:
         
         # training properties:    
         trainOnNormalizedData = True    
-        nTrainsForCrossValidation = 3
+        nTrainsForCrossValidation = 1
         nTrainsOnSameSplit = 1 # not more than 1 because train indices will not match
         batchSize = 8*10
         validation_fraction = 0.3

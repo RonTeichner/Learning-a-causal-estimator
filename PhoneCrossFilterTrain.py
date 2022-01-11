@@ -18,8 +18,8 @@ import copy
 from PhoneAnalysis_func import *
 
 
-enableTrain = True
-enableTest = False
+enableTrain = False
+enableTest = True
 enableOverwriteStatistics = False
 
 
@@ -153,7 +153,7 @@ if enableTest:
     enableDataParallel = True
     resultList = list()
     for phoneAnalysisFileNameTestData, phoneSavedFilterFileName, phoneSavedSmootherFileName in zip(phoneAnalysisFileNamesTrainData, phoneSavedFilterFileNames, phoneSavedSmootherFileNames):
-        #if not(phoneAnalysisFileNameTestData == 's3mini'): continue
+        if not(phoneAnalysisFileNameTestData == 's3mini'): continue
         # load phone's dataset and dedicated filter for reference performance
         print(f'creating test dataset, filename {phoneAnalysisFileNameTestData}')
         phoneCompleteDataset = pickle.load(open(phoneAnalysisFileNameTestData + '_dataset.pt', 'rb'))    
@@ -195,7 +195,7 @@ if enableTest:
         _, _, dedicatedSmoother_meanLikelihood_vsTime_tuple = trainModel(estimatorRnn, dedicatedSmoother_trainLoader, dedicatedSmoother_validationLoader, phoneCompleteDataset, enableDataParallel, dedicatedSmootherModelDict, True, 'test')
         
         for smootherPhoneModel, nonDedicatedFilterFileName, nonDedicatedSmootherFileName in zip(phoneAnalysisFileNamesTrainData, phoneSavedFilterFileNames, phoneSavedSmootherFileNames):
-            #if not(smootherPhoneModel == 'nexus4'): continue
+            if not(smootherPhoneModel == 's3'): continue
             if smootherPhoneModel == phoneAnalysisFileNameTestData: continue
             improvedFilterFileName = 'improvedFilterFor_' + phoneAnalysisFileNameTestData + '_trainedOnSmootherOf_' + smootherPhoneModel
             
