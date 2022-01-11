@@ -20,6 +20,7 @@ from PhoneAnalysis_func import *
 
 createPhoneDataset = False
 enableTrain = True
+enableSparse = True
 enableTest = False
 enableOverwriteStatistics = False
 
@@ -27,13 +28,19 @@ enableSmoothing = False
 
 enablePlotTimeSeries = False
 
-phoneAnalysisFileNamesTrainData = ['nexus4', 's3mini', 'samsungold', 'lgwatch']
-phoneAnalysisFileNameTestDataFiles = ['nexus4', 's3', 's3mini', 'samsungold', 'lgwatch', 'gear']  #['nexus4', 's3', 's3mini', 'samsungold', 'lgwatch', 'gear']  # {'s3', 'train_nexus4', 'lgwatch', 'gear'}
+phoneAnalysisFileNamesTrainData = ['nexus4', 's3', 's3mini']
+phoneAnalysisFileNameTestDataFiles = ['s3mini']  #['nexus4', 's3', 's3mini', 'samsungold', 'lgwatch', 'gear']  #['nexus4', 's3', 's3mini', 'samsungold', 'lgwatch', 'gear']  # {'s3', 'train_nexus4', 'lgwatch', 'gear'}
 #phoneSavedModelFileNames = ['trainedOns3', 'trainedOns3mini'] # {'trainedOnNexus4', 'trainedOnLgWatch', 'trainedOnsamsungold', 'trainedOns3', 'trainedOns3mini' }
-if enableSmoothing:
-    phoneSavedModelFileNames = ['smoother_trainedOn_' + phoneAnalysisFileNameTrainData for phoneAnalysisFileNameTrainData in phoneAnalysisFileNamesTrainData]
+if enableSparse:
+    sparseStr = 'sparse_'
 else:
-    phoneSavedModelFileNames = ['trainedOn_' + phoneAnalysisFileNameTrainData for phoneAnalysisFileNameTrainData in phoneAnalysisFileNamesTrainData]
+    sparseStr = ''
+
+
+if enableSmoothing:
+    phoneSavedModelFileNames = [sparseStr + 'smoother_trainedOn_' + phoneAnalysisFileNameTrainData for phoneAnalysisFileNameTrainData in phoneAnalysisFileNamesTrainData]
+else:
+    phoneSavedModelFileNames = [sparseStr + 'trainedOn_' + phoneAnalysisFileNameTrainData for phoneAnalysisFileNameTrainData in phoneAnalysisFileNamesTrainData]
 
 
 fs = 1/0.005
@@ -76,7 +83,7 @@ if enableTrain:
         
         # training properties:    
         trainOnNormalizedData = True    
-        nTrainsForCrossValidation = 1 
+        nTrainsForCrossValidation = 3
         nTrainsOnSameSplit = 1 # not more than 1 because train indices will not match
         batchSize = 8*10
         validation_fraction = 0.3
@@ -88,14 +95,17 @@ if enableTrain:
         
         # create the trained model
         print('creating model')
-        hidden_dim = 30
+        if enableSparse:
+            hidden_dim = 128 
+        else:
+            hidden_dim = 30 
         num_layers = 1
         nClasses = phoneCompleteDataset.phonesDf['gt'].unique().shape[0]
         useSelectedFeatures = True
         
         enableDataParallel = True
         
-        modelDict = {'trainedOn': 'labeled data', 'smoother': enableSmoothing, 'nClasses': nClasses, 'hidden_dim': hidden_dim, 'num_layers': num_layers, 'useSelectedFeatures': useSelectedFeatures, 'allFeatures': allFeatures, 'featuresIncludeInTrainIndices': featuresIncludeInTrainIndices, 'nFeatures': phoneCompleteDataset.nFeatures, 'trainOnNormalizedData': trainOnNormalizedData, 'statisticsDict': statisticsDict, 'fs': 1/0.005}
+        modelDict = {'enableSparse': enableSparse, 'trainedOn': 'labeled data', 'smoother': enableSmoothing, 'nClasses': nClasses, 'hidden_dim': hidden_dim, 'num_layers': num_layers, 'useSelectedFeatures': useSelectedFeatures, 'allFeatures': allFeatures, 'featuresIncludeInTrainIndices': featuresIncludeInTrainIndices, 'nFeatures': phoneCompleteDataset.nFeatures, 'trainOnNormalizedData': trainOnNormalizedData, 'statisticsDict': statisticsDict, 'fs': 1/0.005}
         
         
         model_state_dict_list, validationLoss_list = list(), list()

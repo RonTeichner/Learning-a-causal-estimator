@@ -182,9 +182,19 @@ class RNN_Filter(nn.Module):
         self.num_layers = num_layers
         self.output_dim = output_dim
         self.fs = modelDict['fs']  # [hz]
-        self.windowSize = 1  # [sec]
+        
+        if not('enableSparse' in modelDict.keys()): modelDict['enableSparse'] = False
+        
+        self.enableSparse = modelDict['enableSparse']
+        if self.enableSparse:
+            self.windowSize = 2  # [sec]
+        else:
+            self.windowSize = 1  # [sec]
         self.windowSize_samples = int(np.round(self.windowSize*self.fs))
         self.windowSize_samples = self.windowSize_samples + (np.mod(self.windowSize_samples, 2) == 0)
+        if self.enableSparse:
+            self.overlap = 0.25
+            self.strideHorizontal = int(np.round(self.overlap*self.windowSize_samples))
         self.nConv_out_channels = 64
         
         if 'smoother' in modelDict.keys():
@@ -205,12 +215,23 @@ class RNN_Filter(nn.Module):
             self.Sigma_minus_half = nn.parameter.Parameter(torch.tensor(modelDict['statisticsDict']['Sigma_minus_half'], dtype=torch.float), requires_grad=False)
             
         self.zeroPadd = nn.parameter.Parameter(torch.zeros(1, self.windowSize_samples-1, self.input_dim), requires_grad=False)
-        self.zeroPadd2 = nn.parameter.Parameter(torch.zeros(1, 1, self.nConv_out_channels, self.windowSize_samples-1), requires_grad=False)
+        if self.enableSparse: 
+            self.downSampleWindowSize = int(np.round(self.windowSize_samples/self.strideHorizontal))
+            self.zeroPadd2 = nn.parameter.Parameter(torch.zeros(1, 1, self.nConv_out_channels, self.downSampleWindowSize-1), requires_grad=False)
+        else:
+            self.zeroPadd2 = nn.parameter.Parameter(torch.zeros(1, 1, self.nConv_out_channels, self.windowSize_samples-1), requires_grad=False)
         
-        self.conv2d_0 = nn.Conv2d(in_channels=1, out_channels=self.nConv_out_channels, kernel_size=(self.input_dim, self.windowSize_samples), padding='valid')
-        self.conv2d_1 = nn.Conv2d(in_channels=1, out_channels=self.nConv_out_channels, kernel_size=(self.nConv_out_channels, self.windowSize_samples), padding='valid')
-        self.conv2d_2 = nn.Conv2d(in_channels=1, out_channels=self.nConv_out_channels, kernel_size=(self.nConv_out_channels, self.windowSize_samples), padding='valid')
-        self.conv2d_3 = nn.Conv2d(in_channels=1, out_channels=self.nConv_out_channels, kernel_size=(self.nConv_out_channels, self.windowSize_samples), padding='valid')
+        if self.enableSparse:
+            self.conv2d_0 = nn.Conv2d(in_channels=1, out_channels=self.nConv_out_channels, kernel_size=(self.input_dim, self.windowSize_samples), stride=(1, self.strideHorizontal), padding='valid')
+            self.conv2d_1 = nn.Conv2d(in_channels=1, out_channels=self.nConv_out_channels, kernel_size=(self.nConv_out_channels, self.downSampleWindowSize), padding='valid')
+            self.conv2d_2 = nn.Conv2d(in_channels=1, out_channels=self.nConv_out_channels, kernel_size=(self.nConv_out_channels, self.downSampleWindowSize), padding='valid')
+            self.conv2d_3 = nn.Conv2d(in_channels=1, out_channels=self.nConv_out_channels, kernel_size=(self.nConv_out_channels, self.downSampleWindowSize), padding='valid')
+        else:
+            self.conv2d_0 = nn.Conv2d(in_channels=1, out_channels=self.nConv_out_channels, kernel_size=(self.input_dim, self.windowSize_samples), padding='valid')
+            self.conv2d_1 = nn.Conv2d(in_channels=1, out_channels=self.nConv_out_channels, kernel_size=(self.nConv_out_channels, self.windowSize_samples), padding='valid')
+            self.conv2d_2 = nn.Conv2d(in_channels=1, out_channels=self.nConv_out_channels, kernel_size=(self.nConv_out_channels, self.windowSize_samples), padding='valid')
+            self.conv2d_3 = nn.Conv2d(in_channels=1, out_channels=self.nConv_out_channels, kernel_size=(self.nConv_out_channels, self.windowSize_samples), padding='valid')
+        
         self.activation = nn.ReLU()
 
         # setup RNN layer        
@@ -239,12 +260,18 @@ class RNN_Filter(nn.Module):
         conv_2 = self.activation(self.conv2d_2(torch.cat((zeroPadd, conv_1.transpose(1,2)), axis=3)))
         conv_3 = self.activation(self.conv2d_3(torch.cat((zeroPadd, conv_2.transpose(1,2)), axis=3)))
         
-        conv_out = conv_1.squeeze(2).transpose(2, 1)
+        if self.enableSparse:
+            conv_out = conv_3.squeeze(2).transpose(2, 1)
+        else:
+            conv_out = conv_1.squeeze(2).transpose(2, 1)
         
-        self.Filter_rnn.flatten_parameters() 
+        #self.Filter_rnn.flatten_parameters() 
         controlHiddenDim, hidden = self.Filter_rnn(conv_out)
         # controlHiddenDim of shape like normalized_tilde_z
         hat_x_k_plus_1_given_k = self.logSoftmax(self.linear(controlHiddenDim))
+        
+        if self.enableSparse:
+            hat_x_k_plus_1_given_k = torch.repeat_interleave(hat_x_k_plus_1_given_k, self.strideHorizontal, dim=1)
 
         return hat_x_k_plus_1_given_k
 
@@ -270,15 +297,20 @@ def augCrop(measurements, measurements_tvec, lengthOfSeries, nMinimalSamples, nM
 def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, enableDataParallel, modelDict, enablePlots, mode, trainOnSmoother=False, smoother_rnn=None):    
     lowThrLr = 1e-5
     nClasses = stateEst_ANN.output_dim
+    if not('enableSparse' in modelDict.keys()): modelDict['enableSparse'] = False
+    if modelDict['enableSparse']: 
+        strideHorizontal = stateEst_ANN.strideHorizontal
+    else:
+        strideHorizontal = 1
     fillValue = -1e-4
     if mode == 'train':
         nValidationEpochs = 10  # for averaging the results over many augmentations
         nMinimalSamples = np.floor(10*modelDict['fs'])  # equal to 10 seconds at the sample rate 
-        nMaximalSamples = np.floor(30*modelDict['fs'])
+        nMaximalSamples = np.floor(60*modelDict['fs'])
     elif mode == 'test':
-        nValidationEpochs = 25  # for averaging the results over many augmentations
+        nValidationEpochs = 100  # for averaging the results over many augmentations
         nMinimalSamples = np.floor(10*modelDict['fs'])  # equal to 10 seconds at the sample rate 
-        nMaximalSamples = np.floor(30*modelDict['fs'])
+        nMaximalSamples = np.floor(60*modelDict['fs'])
     
     if trainOnSmoother: smoother_rnn.eval()
     # training method:    
@@ -332,12 +364,12 @@ def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, ena
                 validSeries = lengthOfSeries >= minimalSeriesLength
                 if not(validSeries.any()): continue
                 lengthOfSeries = lengthOfSeries[validSeries]
-                maxLengthOfSeries = lengthOfSeries.max()
+                maxLengthOfSeries = lengthOfSeries.max()                
                 measurements = sample_batched["measurements"][:, :maxLengthOfSeries][validSeries]  # [nBatch, nTime, nFeature]            
                 measurements_tvec = sample_batched["tVec"][:, :maxLengthOfSeries][validSeries]
                 
                 #  crop measurements for augmentations purpose:                
-                measurements, measurements_tvec, lengthOfSeries = augCrop(measurements, measurements_tvec, lengthOfSeries, nMinimalSamples, nMaximalSamples, fillValue)
+                measurements, measurements_tvec, lengthOfSeries = augCrop(measurements, measurements_tvec, lengthOfSeries, nMinimalSamples, int(np.min([int(maxLengthOfSeries/strideHorizontal)*strideHorizontal, nMaximalSamples])), fillValue)
                 
                 #if not(trainOnSmoother):
                 labels = measurements[:, :, -1][:, :, None].type(torch.int64)
@@ -383,7 +415,7 @@ def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, ena
                     validIndices[seriesStartIdx : seriesStopIdx] = True
                     
                 if trainOnSmoother: validIndices = torch.logical_and(validIndices, DefinedClassIndices_flatten[:, 0])
-                                    
+                                                    
                 loss = criterion(hat_x_k_plus_1_given_k_flatten[validIndices], filteringLabels_flatten[validIndices, 0])            
          
                 loss = measurements.shape[0]/len(trainLoader.dataset) * loss
@@ -441,7 +473,7 @@ def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, ena
                 measurements_tvec = sample_batched["tVec"][:, :maxLengthOfSeries][validSeries]
                 
                 #  crop measurements for augmentations purpose:                
-                measurements, measurements_tvec, lengthOfSeries = augCrop(measurements, measurements_tvec, lengthOfSeries, nMinimalSamples, nMaximalSamples, fillValue)
+                measurements, measurements_tvec, lengthOfSeries = augCrop(measurements, measurements_tvec, lengthOfSeries, nMinimalSamples, int(np.min([int(maxLengthOfSeries/strideHorizontal)*strideHorizontal, nMaximalSamples])), fillValue)
                     
                 #if not(trainOnSmoother):
                 labels = measurements[:, :, -1][:, :, None].type(torch.int64)
