@@ -140,7 +140,7 @@ watch_acc_path = './Activity recognition exp/Watch_accelerometer.csv'
 watch_gyr_path = './Activity recognition exp/Watch_gyroscope.csv'
 
 enable_acc_only = True
-createType = 'watch'  # {'phone', 'watch'}
+createType = 'phone'  # {'phone', 'watch'}
 if createType == 'phone':
     files = [(phone_acc_path, 'Pacc'), (phone_gyr_path, 'Pgyr')]  #, (watch_acc_path, 'Wacc'), (watch_gyr_path, 'Wgyr')]
 elif createType == 'watch':

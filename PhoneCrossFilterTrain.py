@@ -18,31 +18,37 @@ import copy
 from PhoneAnalysis_func import *
 
 
-enableTrain = False
+enableTrain = False 
+enableSparse = True
 enableTest = True
+onlyDedicated = True
+noImprove = True
+jointEstimators = True
 enableOverwriteStatistics = False
 
-
-phoneAnalysisFileNamesTrainData = ['nexus4', 's3', 's3mini']  #, 'samsungold']  #, 'lgwatch']
-phoneSavedSmootherFileNames = ['smoother_trainedOn_' + phoneAnalysisFileNameTrainData for phoneAnalysisFileNameTrainData in phoneAnalysisFileNamesTrainData]
-phoneSavedImprovedFilterFileNames = ['improvedFilterFor_' + phoneAnalysisFileNameTrainData + '_trainedOnSmootherOf_' + SphoneAnalysisFileNameTrainData for phoneAnalysisFileNameTrainData in phoneAnalysisFileNamesTrainData for SphoneAnalysisFileNameTrainData in phoneAnalysisFileNamesTrainData]
-
-phoneSavedFilterFileNames = ['trainedOn_' + phoneAnalysisFileNameTrainData for phoneAnalysisFileNameTrainData in phoneAnalysisFileNamesTrainData]
+if enableSparse:
+    sparseStr = 'sparse_'
+else:
+    sparseStr = ''
+    
+phoneAnalysisFileNamesTrainData = ['nexus4', 's3', 's3mini']  #, 'samsungold', 'lgwatch']  #, 'lgwatch']
+phoneSavedSmootherFileNames = [sparseStr + 'smoother_trainedOn_' + phoneAnalysisFileNameTrainData for phoneAnalysisFileNameTrainData in phoneAnalysisFileNamesTrainData]
+phoneSavedFilterFileNames = [sparseStr + 'trainedOn_' + phoneAnalysisFileNameTrainData for phoneAnalysisFileNameTrainData in phoneAnalysisFileNamesTrainData]
 #phoneAnalysisFileNameTestDataFiles = ['nexus4', 's3', 's3mini', 'samsungold', 'lgwatch', 'gear']  #['nexus4', 's3', 's3mini', 'samsungold', 'lgwatch', 'gear']  # {'s3', 'train_nexus4', 'lgwatch', 'gear'}
 
 fs = 1/0.005
     
 if enableTrain:
     for smootherPhoneModel, phoneSavedSmootherFileName in zip(phoneAnalysisFileNamesTrainData, phoneSavedSmootherFileNames):
-        if not(smootherPhoneModel == 's3'): continue
+        #if not(smootherPhoneModel == 's3'): continue
         for phoneAnalysisFileNameTrainData in phoneAnalysisFileNamesTrainData:  # the improved filter
             if phoneAnalysisFileNameTrainData == smootherPhoneModel: continue
-            if not(phoneAnalysisFileNameTrainData == 's3mini'): continue
+            #if not(phoneAnalysisFileNameTrainData == 's3mini'): continue
         
-            phoneSavedModelFileName = 'improvedFilterFor_' + phoneAnalysisFileNameTrainData + '_trainedOnSmootherOf_' + smootherPhoneModel
+            phoneSavedModelFileName = sparseStr + 'improvedFilterFor_' + phoneAnalysisFileNameTrainData + '_trainedOnSmootherOf_' + smootherPhoneModel
             print(f'starting {phoneSavedModelFileName}')
         
-            enablePlots = True
+            enablePlots = False
             phoneCompleteDataset = pickle.load(open(phoneAnalysisFileNameTrainData + '_dataset.pt', 'rb'))
             
             model = phoneCompleteDataset.metaDataDf['Classification'].unique().tolist()[0]
@@ -58,7 +64,7 @@ if enableTrain:
             print(f'dataset contains {len(phoneCompleteDataset)} time series')
             
             # training properties:    
-            trainOnNormalizedData = True    
+            trainOnNormalizedData = False    
             nTrainsForCrossValidation = 1
             nTrainsOnSameSplit = 1 # not more than 1 because train indices will not match
             batchSize = 8*10
@@ -153,28 +159,29 @@ if enableTest:
     enableDataParallel = True
     resultList = list()
     for phoneAnalysisFileNameTestData, phoneSavedFilterFileName, phoneSavedSmootherFileName in zip(phoneAnalysisFileNamesTrainData, phoneSavedFilterFileNames, phoneSavedSmootherFileNames):
-        if not(phoneAnalysisFileNameTestData == 's3mini'): continue
+        #if not(phoneAnalysisFileNameTestData == 's3'): continue
         # load phone's dataset and dedicated filter for reference performance
         print(f'creating test dataset, filename {phoneAnalysisFileNameTestData}')
         phoneCompleteDataset = pickle.load(open(phoneAnalysisFileNameTestData + '_dataset.pt', 'rb'))    
         print(f'total of {np.round((phoneCompleteDataset.phonesDf.shape[0]-1)/fs)} sec')
         
-        dedicatedFilterModelDict = pickle.load(open(phoneSavedFilterFileName + '_modelDict.pt', 'rb'))
-        if dedicatedFilterModelDict['datasetFile'] == phoneAnalysisFileNameTestData + '_dataset.pt':
-            dedicatedFilter_trainData = Subset(phoneCompleteDataset, dedicatedFilterModelDict['trainIndices'])        
-            dedicatedFilter_validationData = Subset(phoneCompleteDataset, dedicatedFilterModelDict['validationIndices'])        
-        else:
-            dedicatedFilter_trainData, dedicatedFilter_validationData = phoneCompleteDataset, phoneCompleteDataset
-            assert False,'this should not happen'
-        
-        dedicatedFilter_trainLoader = DataLoader(dedicatedFilter_trainData, batch_size=20, shuffle=True, num_workers=0)     
-        dedicatedFilter_validationLoader = DataLoader(dedicatedFilter_validationData, batch_size=20*8, shuffle=True, num_workers=0)                 
-        
-        estimatorRnn = RNN_Filter(input_dim = len(dedicatedFilterModelDict['allFeatures']), hidden_dim=dedicatedFilterModelDict['hidden_dim'], output_dim=dedicatedFilterModelDict['nClasses'], num_layers=dedicatedFilterModelDict['num_layers'], modelDict=dedicatedFilterModelDict)
-        estimatorRnn.load_state_dict(torch.load(phoneSavedFilterFileName  + '_model.pt'))
-        
-        print(f'starting test of {phoneAnalysisFileNameTestData} on model {phoneSavedFilterFileName}')
-        _, _, dedicatedFilter_meanLikelihood_vsTime_tuple = trainModel(estimatorRnn, dedicatedFilter_trainLoader, dedicatedFilter_validationLoader, phoneCompleteDataset, enableDataParallel, dedicatedFilterModelDict, True, 'test')
+        if not(jointEstimators):
+            dedicatedFilterModelDict = pickle.load(open(phoneSavedFilterFileName + '_modelDict.pt', 'rb'))
+            if dedicatedFilterModelDict['datasetFile'] == phoneAnalysisFileNameTestData + '_dataset.pt':
+                dedicatedFilter_trainData = Subset(phoneCompleteDataset, dedicatedFilterModelDict['trainIndices'])        
+                dedicatedFilter_validationData = Subset(phoneCompleteDataset, dedicatedFilterModelDict['validationIndices'])        
+            else:
+                dedicatedFilter_trainData, dedicatedFilter_validationData = phoneCompleteDataset, phoneCompleteDataset
+                assert False,'this should not happen'
+            
+            dedicatedFilter_trainLoader = DataLoader(dedicatedFilter_trainData, batch_size=20, shuffle=True, num_workers=0)     
+            dedicatedFilter_validationLoader = DataLoader(dedicatedFilter_validationData, batch_size=20*8, shuffle=True, num_workers=0)                 
+            
+            estimatorRnn = RNN_Filter(input_dim = len(dedicatedFilterModelDict['allFeatures']), hidden_dim=dedicatedFilterModelDict['hidden_dim'], output_dim=dedicatedFilterModelDict['nClasses'], num_layers=dedicatedFilterModelDict['num_layers'], modelDict=dedicatedFilterModelDict)
+            estimatorRnn.load_state_dict(torch.load(phoneSavedFilterFileName  + '_model.pt'))
+            
+            print(f'starting test of {phoneAnalysisFileNameTestData} on model {phoneSavedFilterFileName}')
+            _, _, dedicatedFilter_meanLikelihood_vsTime_tuple = trainModel(estimatorRnn, dedicatedFilter_trainLoader, dedicatedFilter_validationLoader, phoneCompleteDataset, enableDataParallel, dedicatedFilterModelDict, True, 'test')
         
         
         dedicatedSmootherModelDict = pickle.load(open(phoneSavedSmootherFileName + '_modelDict.pt', 'rb'))
@@ -194,46 +201,72 @@ if enableTest:
         print(f'starting test of {phoneAnalysisFileNameTestData} on model {phoneSavedSmootherFileName}')
         _, _, dedicatedSmoother_meanLikelihood_vsTime_tuple = trainModel(estimatorRnn, dedicatedSmoother_trainLoader, dedicatedSmoother_validationLoader, phoneCompleteDataset, enableDataParallel, dedicatedSmootherModelDict, True, 'test')
         
-        for smootherPhoneModel, nonDedicatedFilterFileName, nonDedicatedSmootherFileName in zip(phoneAnalysisFileNamesTrainData, phoneSavedFilterFileNames, phoneSavedSmootherFileNames):
-            if not(smootherPhoneModel == 's3'): continue
-            if smootherPhoneModel == phoneAnalysisFileNameTestData: continue
-            improvedFilterFileName = 'improvedFilterFor_' + phoneAnalysisFileNameTestData + '_trainedOnSmootherOf_' + smootherPhoneModel
+        if jointEstimators:
+            dedicatedFilter_meanLikelihood_vsTime_tuple = (dedicatedSmoother_meanLikelihood_vsTime_tuple[0], dedicatedSmoother_meanLikelihood_vsTime_tuple[1])
+            dedicatedSmoother_meanLikelihood_vsTime_tuple = (dedicatedSmoother_meanLikelihood_vsTime_tuple[3], dedicatedSmoother_meanLikelihood_vsTime_tuple[4])
+        
+        if onlyDedicated:
+            # plots:
+            resTuple=dedicatedFilter_meanLikelihood_vsTime_tuple
+            plt.plot(resTuple[1], resTuple[0], label=phoneAnalysisFileNameTestData + ' on ' + phoneAnalysisFileNameTestData + ' filter')
+            
+            resTuple=dedicatedSmoother_meanLikelihood_vsTime_tuple            
+            plt.plot(resTuple[1], resTuple[0], label=phoneAnalysisFileNameTestData + ' on ' + phoneAnalysisFileNameTestData + ' smoother')
+            
+            plt.xlabel('sec from change of state')
+            plt.ylabel('likelihood')
+            plt.grid()
+            #plt.ylim([0.4, 0.85])
+            #plt.xlim([0, 4])
+            plt.legend()
+            plt.show()
+            
+            continue
+        
+        for testedPhoneModel in phoneAnalysisFileNamesTrainData:
+            #if not(testedPhoneModel == 's3'): continue
+            if testedPhoneModel == phoneAnalysisFileNameTestData: continue
+            nonDedicatedFilterFileName, nonDedicatedSmootherFileName = phoneSavedFilterFileName, phoneSavedSmootherFileName
+            improvedFilterFileName = sparseStr + 'improvedFilterFor_' + testedPhoneModel + '_trainedOnSmootherOf_' + phoneAnalysisFileNameTestData
+            
+            phoneCompleteDataset = pickle.load(open(testedPhoneModel + '_dataset.pt', 'rb'))    
             
             # non dedicated filter:
-            nonDedicatedFilterModelDict = pickle.load(open(nonDedicatedFilterFileName + '_modelDict.pt', 'rb'))
-            if nonDedicatedFilterModelDict['datasetFile'] == phoneAnalysisFileNameTestData + '_dataset.pt':
-                assert False,'this should not happen'
-                nonDedicatedFilter_trainData = Subset(phoneCompleteDataset, nonDedicatedFilterModelDict['trainIndices'])        
-                nonDedicatedFilter_validationData = Subset(phoneCompleteDataset, nonDedicatedFilterModelDict['validationIndices'])        
-            else:
-                nonDedicatedFilter_trainData, nonDedicatedFilter_validationData = phoneCompleteDataset, phoneCompleteDataset
+            if not(jointEstimators):
+                nonDedicatedFilterModelDict = pickle.load(open(nonDedicatedFilterFileName + '_modelDict.pt', 'rb'))
+                if nonDedicatedFilterModelDict['datasetFile'] == testedPhoneModel + '_dataset.pt':
+                    assert False,'this should not happen'
+                    nonDedicatedFilter_trainData = Subset(phoneCompleteDataset, nonDedicatedFilterModelDict['trainIndices'])        
+                    nonDedicatedFilter_validationData = Subset(phoneCompleteDataset, nonDedicatedFilterModelDict['validationIndices'])        
+                else:
+                    nonDedicatedFilter_trainData, nonDedicatedFilter_validationData = phoneCompleteDataset, phoneCompleteDataset
+                    
                 
-            
-            nonDedicatedFilter_trainLoader = DataLoader(nonDedicatedFilter_trainData, batch_size=20, shuffle=True, num_workers=0)     
-            nonDedicatedFilter_validationLoader = DataLoader(nonDedicatedFilter_validationData, batch_size=20*8, shuffle=True, num_workers=0)                 
-            
-            estimatorRnn = RNN_Filter(input_dim = len(nonDedicatedFilterModelDict['allFeatures']), hidden_dim=nonDedicatedFilterModelDict['hidden_dim'], output_dim=nonDedicatedFilterModelDict['nClasses'], num_layers=nonDedicatedFilterModelDict['num_layers'], modelDict=nonDedicatedFilterModelDict)
-            estimatorRnn.load_state_dict(torch.load(nonDedicatedFilterFileName  + '_model.pt'))
-            
-            if enableOverwriteStatistics:
-                statisticsDict = {'classDistribution': nonDedicatedFilterModelDict['statisticsDict']['classDistribution'], 'mu': phoneCompleteDataset.mu, 'Sigma_minus_half': phoneCompleteDataset.Sigma_minus_half, 'Sigma_half': phoneCompleteDataset.Sigma_half}
-                nonDedicatedFilterModelDict['statisticsDict'] = statisticsDict
-                if nonDedicatedFilterModelDict['useSelectedFeatures']:
-                    # modelDict['statisticsDict']['mu'] includes the statistics of the time-axis at the last coordinate
-                    idx = nonDedicatedFilterModelDict['featuresIncludeInTrainIndices']
-                    estimatorRnn.means = nn.parameter.Parameter(torch.tensor(nonDedicatedFilterModelDict['statisticsDict']['mu'][idx], dtype=torch.float), requires_grad=False)
-                    Sigma_minus_half = np.diag(np.diag(nonDedicatedFilterModelDict['statisticsDict']['Sigma_minus_half'])[idx])
-                    estimatorRnn.Sigma_minus_half = nn.parameter.Parameter(torch.tensor(Sigma_minus_half, dtype=torch.float), requires_grad=False)            
-                else:                
-                    estimatorRnn.means = nn.parameter.Parameter(torch.tensor(nonDedicatedFilterModelDict['statisticsDict']['mu'], dtype=torch.float), requires_grad=False)
-                    estimatorRnn.Sigma_minus_half = nn.parameter.Parameter(torch.tensor(nonDedicatedFilterModelDict['statisticsDict']['Sigma_minus_half'], dtype=torch.float), requires_grad=False)
-            
-            print(f'starting test of {phoneAnalysisFileNameTestData} on model {nonDedicatedFilterFileName}')
-            _, _, nonDedicatedFilter_meanLikelihood_vsTime_tuple = trainModel(estimatorRnn, nonDedicatedFilter_trainLoader, nonDedicatedFilter_validationLoader, phoneCompleteDataset, enableDataParallel, nonDedicatedFilterModelDict, True, 'test')
+                nonDedicatedFilter_trainLoader = DataLoader(nonDedicatedFilter_trainData, batch_size=20, shuffle=True, num_workers=0)     
+                nonDedicatedFilter_validationLoader = DataLoader(nonDedicatedFilter_validationData, batch_size=20*8, shuffle=True, num_workers=0)                 
+                
+                estimatorRnn = RNN_Filter(input_dim = len(nonDedicatedFilterModelDict['allFeatures']), hidden_dim=nonDedicatedFilterModelDict['hidden_dim'], output_dim=nonDedicatedFilterModelDict['nClasses'], num_layers=nonDedicatedFilterModelDict['num_layers'], modelDict=nonDedicatedFilterModelDict)
+                estimatorRnn.load_state_dict(torch.load(nonDedicatedFilterFileName  + '_model.pt'))
+                
+                if enableOverwriteStatistics:
+                    statisticsDict = {'classDistribution': nonDedicatedFilterModelDict['statisticsDict']['classDistribution'], 'mu': phoneCompleteDataset.mu, 'Sigma_minus_half': phoneCompleteDataset.Sigma_minus_half, 'Sigma_half': phoneCompleteDataset.Sigma_half}
+                    nonDedicatedFilterModelDict['statisticsDict'] = statisticsDict
+                    if nonDedicatedFilterModelDict['useSelectedFeatures']:
+                        # modelDict['statisticsDict']['mu'] includes the statistics of the time-axis at the last coordinate
+                        idx = nonDedicatedFilterModelDict['featuresIncludeInTrainIndices']
+                        estimatorRnn.means = nn.parameter.Parameter(torch.tensor(nonDedicatedFilterModelDict['statisticsDict']['mu'][idx], dtype=torch.float), requires_grad=False)
+                        Sigma_minus_half = np.diag(np.diag(nonDedicatedFilterModelDict['statisticsDict']['Sigma_minus_half'])[idx])
+                        estimatorRnn.Sigma_minus_half = nn.parameter.Parameter(torch.tensor(Sigma_minus_half, dtype=torch.float), requires_grad=False)            
+                    else:                
+                        estimatorRnn.means = nn.parameter.Parameter(torch.tensor(nonDedicatedFilterModelDict['statisticsDict']['mu'], dtype=torch.float), requires_grad=False)
+                        estimatorRnn.Sigma_minus_half = nn.parameter.Parameter(torch.tensor(nonDedicatedFilterModelDict['statisticsDict']['Sigma_minus_half'], dtype=torch.float), requires_grad=False)
+                
+                print(f'starting test of {testedPhoneModel} on model {nonDedicatedFilterFileName}')
+                _, _, nonDedicatedFilter_meanLikelihood_vsTime_tuple = trainModel(estimatorRnn, nonDedicatedFilter_trainLoader, nonDedicatedFilter_validationLoader, phoneCompleteDataset, enableDataParallel, nonDedicatedFilterModelDict, True, 'test')
             
             # non dedicated smoother:
             nonDedicatedSmootherModelDict = pickle.load(open(nonDedicatedSmootherFileName + '_modelDict.pt', 'rb'))
-            if nonDedicatedSmootherModelDict['datasetFile'] == phoneAnalysisFileNameTestData + '_dataset.pt':
+            if nonDedicatedSmootherModelDict['datasetFile'] == testedPhoneModel + '_dataset.pt':
                 assert False,'this should not happen'
                 nonDedicatedSmoother_trainData = Subset(phoneCompleteDataset, nonDedicatedSmootherModelDict['trainIndices'])        
                 nonDedicatedSmoother_validationData = Subset(phoneCompleteDataset, nonDedicatedSmootherModelDict['validationIndices'])        
@@ -261,40 +294,48 @@ if enableTest:
                     estimatorRnn.Sigma_minus_half = nn.parameter.Parameter(torch.tensor(nonDedicatedSmootherModelDict['statisticsDict']['Sigma_minus_half'], dtype=torch.float), requires_grad=False)
             
             
-            print(f'starting test of {phoneAnalysisFileNameTestData} on model {nonDedicatedSmootherFileName}')
+            print(f'starting test of {testedPhoneModel} on model {nonDedicatedSmootherFileName}')
             _, _, nonDedicatedSmoother_meanLikelihood_vsTime_tuple = trainModel(estimatorRnn, nonDedicatedSmoother_trainLoader, nonDedicatedSmoother_validationLoader, phoneCompleteDataset, enableDataParallel, nonDedicatedSmootherModelDict, True, 'test')
             
-            # improved filter:
-            improvedFilterModelDict = pickle.load(open(improvedFilterFileName + '_modelDict.pt', 'rb'))
+            if jointEstimators:
+                nonDedicatedFilter_meanLikelihood_vsTime_tuple = (nonDedicatedSmoother_meanLikelihood_vsTime_tuple[0], nonDedicatedSmoother_meanLikelihood_vsTime_tuple[1])
+                nonDedicatedSmoother_meanLikelihood_vsTime_tuple = (nonDedicatedSmoother_meanLikelihood_vsTime_tuple[3], nonDedicatedSmoother_meanLikelihood_vsTime_tuple[4])
             
-            if improvedFilterModelDict['datasetFile'] == phoneAnalysisFileNameTestData + '_dataset.pt':                
-                improvedFilter_trainData = Subset(phoneCompleteDataset, improvedFilterModelDict['trainIndices'])        
-                improvedFilter_validationData = Subset(phoneCompleteDataset, improvedFilterModelDict['validationIndices'])        
-            else:
-                assert False,'this should not happen'
-                improvedFilter_trainData, improvedFilter_validationData = phoneCompleteDataset, phoneCompleteDataset
-            
-            improvedFilter_trainLoader = DataLoader(improvedFilter_trainData, batch_size=20, shuffle=True, num_workers=0)     
-            improvedFilter_validationLoader = DataLoader(improvedFilter_validationData, batch_size=20*8, shuffle=True, num_workers=0)                 
-            
-            estimatorRnn = RNN_Filter(input_dim = len(improvedFilterModelDict['allFeatures']), hidden_dim=improvedFilterModelDict['hidden_dim'], output_dim=improvedFilterModelDict['nClasses'], num_layers=improvedFilterModelDict['num_layers'], modelDict=improvedFilterModelDict)
-            estimatorRnn.load_state_dict(torch.load(improvedFilterFileName  + '_model.pt'))
-            
-            if enableOverwriteStatistics:
-                statisticsDict = {'classDistribution': improvedFilterModelDict['statisticsDict']['classDistribution'], 'mu': phoneCompleteDataset.mu, 'Sigma_minus_half': phoneCompleteDataset.Sigma_minus_half, 'Sigma_half': phoneCompleteDataset.Sigma_half}
-                improvedFilterModelDict['statisticsDict'] = statisticsDict
-                if improvedFilterModelDict['useSelectedFeatures']:
-                    # modelDict['statisticsDict']['mu'] includes the statistics of the time-axis at the last coordinate
-                    idx = improvedFilterModelDict['featuresIncludeInTrainIndices']
-                    estimatorRnn.means = nn.parameter.Parameter(torch.tensor(improvedFilterModelDict['statisticsDict']['mu'][idx], dtype=torch.float), requires_grad=False)
-                    Sigma_minus_half = np.diag(np.diag(improvedFilterModelDict['statisticsDict']['Sigma_minus_half'])[idx])
-                    estimatorRnn.Sigma_minus_half = nn.parameter.Parameter(torch.tensor(Sigma_minus_half, dtype=torch.float), requires_grad=False)            
-                else:                
-                    estimatorRnn.means = nn.parameter.Parameter(torch.tensor(improvedFilterModelDict['statisticsDict']['mu'], dtype=torch.float), requires_grad=False)
-                    estimatorRnn.Sigma_minus_half = nn.parameter.Parameter(torch.tensor(improvedFilterModelDict['statisticsDict']['Sigma_minus_half'], dtype=torch.float), requires_grad=False)
-            
-            print(f'starting test of {phoneAnalysisFileNameTestData} on model {improvedFilterFileName}')
-            _, _, improvedFilter_meanLikelihood_vsTime_tuple = trainModel(estimatorRnn, improvedFilter_trainLoader, improvedFilter_validationLoader, phoneCompleteDataset, enableDataParallel, improvedFilterModelDict, True, 'test')
+            if not(noImprove):
+                # improved filter:
+                improvedFilterModelDict = pickle.load(open(improvedFilterFileName + '_modelDict.pt', 'rb'))
+                
+                if improvedFilterModelDict['datasetFile'] == testedPhoneModel + '_dataset.pt':                
+                    improvedFilter_trainData = Subset(phoneCompleteDataset, improvedFilterModelDict['trainIndices'])        
+                    improvedFilter_validationData = Subset(phoneCompleteDataset, improvedFilterModelDict['validationIndices'])        
+                else:
+                    assert False,'this should not happen'
+                    improvedFilter_trainData, improvedFilter_validationData = phoneCompleteDataset, phoneCompleteDataset
+                
+                improvedFilter_trainLoader = DataLoader(improvedFilter_trainData, batch_size=20, shuffle=True, num_workers=0)     
+                improvedFilter_validationLoader = DataLoader(improvedFilter_validationData, batch_size=20*8, shuffle=True, num_workers=0)                 
+                
+                estimatorRnn = RNN_Filter(input_dim = len(improvedFilterModelDict['allFeatures']), hidden_dim=improvedFilterModelDict['hidden_dim'], output_dim=improvedFilterModelDict['nClasses'], num_layers=improvedFilterModelDict['num_layers'], modelDict=improvedFilterModelDict)
+                estimatorRnn.load_state_dict(torch.load(improvedFilterFileName  + '_model.pt'))
+                
+                if enableOverwriteStatistics:
+                    statisticsDict = {'classDistribution': improvedFilterModelDict['statisticsDict']['classDistribution'], 'mu': phoneCompleteDataset.mu, 'Sigma_minus_half': phoneCompleteDataset.Sigma_minus_half, 'Sigma_half': phoneCompleteDataset.Sigma_half}
+                    improvedFilterModelDict['statisticsDict'] = statisticsDict
+                    if improvedFilterModelDict['useSelectedFeatures']:
+                        # modelDict['statisticsDict']['mu'] includes the statistics of the time-axis at the last coordinate
+                        idx = improvedFilterModelDict['featuresIncludeInTrainIndices']
+                        estimatorRnn.means = nn.parameter.Parameter(torch.tensor(improvedFilterModelDict['statisticsDict']['mu'][idx], dtype=torch.float), requires_grad=False)
+                        Sigma_minus_half = np.diag(np.diag(improvedFilterModelDict['statisticsDict']['Sigma_minus_half'])[idx])
+                        estimatorRnn.Sigma_minus_half = nn.parameter.Parameter(torch.tensor(Sigma_minus_half, dtype=torch.float), requires_grad=False)            
+                    else:                
+                        estimatorRnn.means = nn.parameter.Parameter(torch.tensor(improvedFilterModelDict['statisticsDict']['mu'], dtype=torch.float), requires_grad=False)
+                        estimatorRnn.Sigma_minus_half = nn.parameter.Parameter(torch.tensor(improvedFilterModelDict['statisticsDict']['Sigma_minus_half'], dtype=torch.float), requires_grad=False)
+                
+                print(f'starting test of {testedPhoneModel} on model {improvedFilterFileName}')
+                _, _, improvedFilter_meanLikelihood_vsTime_tuple = trainModel(estimatorRnn, improvedFilter_trainLoader, improvedFilter_validationLoader, phoneCompleteDataset, enableDataParallel, improvedFilterModelDict, True, 'test')
+            else:                
+                improvedFilter_meanLikelihood_vsTime_tuple = (np.zeros_like(dedicatedSmoother_meanLikelihood_vsTime_tuple[0]), dedicatedSmoother_meanLikelihood_vsTime_tuple[1])
+                
             
             # plots:
             resTuple=dedicatedFilter_meanLikelihood_vsTime_tuple
@@ -304,26 +345,54 @@ if enableTest:
             plt.plot(resTuple[1], resTuple[0], label=phoneAnalysisFileNameTestData + ' on ' + phoneAnalysisFileNameTestData + ' smoother')
             
             resTuple=nonDedicatedFilter_meanLikelihood_vsTime_tuple
-            plt.plot(resTuple[1], resTuple[0], label=phoneAnalysisFileNameTestData + ' on ' + smootherPhoneModel + ' filter')
+            plt.plot(resTuple[1], resTuple[0], label=testedPhoneModel + ' on ' + phoneAnalysisFileNameTestData + ' filter')
             
             resTuple=nonDedicatedSmoother_meanLikelihood_vsTime_tuple
-            plt.plot(resTuple[1], resTuple[0], label=phoneAnalysisFileNameTestData + ' on ' + smootherPhoneModel + ' smoother')
+            plt.plot(resTuple[1], resTuple[0], label=testedPhoneModel + ' on ' + phoneAnalysisFileNameTestData + ' smoother')
             
             resTuple=improvedFilter_meanLikelihood_vsTime_tuple
-            plt.plot(resTuple[1], resTuple[0], label=phoneAnalysisFileNameTestData + ' on ' + 'improved filter')                        
+            plt.plot(resTuple[1], resTuple[0], label=testedPhoneModel + ' on ' + 'improved filter')                        
             
             plt.xlabel('sec from change of state')
             plt.ylabel('likelihood')
             plt.grid()
-            plt.ylim([0.4, 0.85])
-            plt.xlim([0, 4])
+            #plt.ylim([0.4, 0.85])
+            #plt.xlim([0, 4])
             plt.legend()
             plt.show()
             
-            resultDict = {'testedPhone': phoneAnalysisFileNameTestData, 'estimatorPhone': smootherPhoneModel, 'dedicatedFilter': dedicatedFilter_meanLikelihood_vsTime_tuple, 'dedicatedSmoother': dedicatedSmoother_meanLikelihood_vsTime_tuple, 'nonDedicatedFilter': nonDedicatedFilter_meanLikelihood_vsTime_tuple, 'nonDedicatedSmoother': nonDedicatedSmoother_meanLikelihood_vsTime_tuple, 'learnedFilter': improvedFilter_meanLikelihood_vsTime_tuple}
+            resultDict = {'testedPhone': phoneAnalysisFileNameTestData, 'estimatorPhone': testedPhoneModel, 'dedicatedFilter': dedicatedFilter_meanLikelihood_vsTime_tuple, 'dedicatedSmoother': dedicatedSmoother_meanLikelihood_vsTime_tuple, 'nonDedicatedFilter': nonDedicatedFilter_meanLikelihood_vsTime_tuple, 'nonDedicatedSmoother': nonDedicatedSmoother_meanLikelihood_vsTime_tuple, 'learnedFilter': improvedFilter_meanLikelihood_vsTime_tuple}
             resultList.append(resultDict)
 
-    pickle.dump(resultDict, open('allResults.pt', 'wb'))
+    pickle.dump(resultList, open('allResults.pt', 'wb'))
+    
+if enablePlotTest:
+    resultList = pickle.load(open('allResultsFullRes.pt', 'rb'))
+    
+    for resultDict in resultList:
+        # plots:
+        resTuple=resultsDict['dedicatedFilter']
+        plt.plot(resTuple[1], resTuple[0], label=resultsDict['testedPhone'] + ' on ' + resultsDict['testedPhone'] + ' filter')
+        
+        resTuple=resultsDict['dedicatedSmoother']            
+        plt.plot(resTuple[1], resTuple[0], label=resultsDict['testedPhone'] + ' on ' + resultsDict['testedPhone'] + ' smoother')
+        
+        resTuple=resultsDict['nonDedicatedFilter']            
+        plt.plot(resTuple[1], resTuple[0], label=resultsDict['testedPhone'] + ' on ' + resultsDict['estimatorPhone'] + ' filter')
+        
+        resTuple=resultsDict['nonDedicatedSmoother']            
+        plt.plot(resTuple[1], resTuple[0], label=resultsDict['testedPhone'] + ' on ' + resultsDict['estimatorPhone'] + ' smoother')
+        
+        resTuple=resultsDict['learnedFilter']            
+        plt.plot(resTuple[1], resTuple[0], label=resultsDict['testedPhone'] + ' on ' + 'improved filter')                        
+        
+        plt.xlabel('sec from change of state')
+        plt.ylabel('likelihood')
+        plt.grid()
+        #plt.ylim([0.4, 0.85])
+        #plt.xlim([0, 4])
+        plt.legend()
+        plt.show()
             
             
             

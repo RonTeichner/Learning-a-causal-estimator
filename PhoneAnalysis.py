@@ -66,7 +66,7 @@ if enablePlotTimeSeries:
     
 if enableTrain:
     for phoneAnalysisFileNameTrainData, phoneSavedModelFileName in zip(phoneAnalysisFileNamesTrainData, phoneSavedModelFileNames):
-        enablePlots = True
+        enablePlots = False
         phoneCompleteDataset = pickle.load(open(phoneAnalysisFileNameTrainData + '_dataset.pt', 'rb'))
         
         model = phoneCompleteDataset.metaDataDf['Classification'].unique().tolist()[0]
@@ -74,9 +74,9 @@ if enableTrain:
         values, counts = np.unique(classes, return_counts=True)
         counts = counts/counts.sum()
         values = ['noClass', 'stand', 'sit', 'walk', 'stairsup', 'stairsdown', 'bike']
-        plt.bar(values, counts)
-        plt.title(model)
-        plt.show()
+        #plt.bar(values, counts)
+        #plt.title(model)
+        #plt.show()
         
         statisticsDict = {'classDistribution': (values, counts), 'mu': phoneCompleteDataset.mu, 'Sigma_minus_half': phoneCompleteDataset.Sigma_minus_half, 'Sigma_half': phoneCompleteDataset.Sigma_half}
         print(f'dataset contains {len(phoneCompleteDataset)} time series')
@@ -84,7 +84,7 @@ if enableTrain:
         # training properties:    
         trainOnNormalizedData = True    
         nTrainsForCrossValidation = 1
-        nTrainsOnSameSplit = 1 # not more than 1 because train indices will not match
+        nTrainsOnSameSplit = 3   # not more than 1 because train indices will not match
         batchSize = 8*10
         validation_fraction = 0.3
         nValidation = int(validation_fraction*len(phoneCompleteDataset))
@@ -96,7 +96,7 @@ if enableTrain:
         # create the trained model
         print('creating model')
         if enableSparse:
-            hidden_dim = 128 
+            hidden_dim = 30 
         else:
             hidden_dim = 30 
         num_layers = 1
@@ -114,7 +114,7 @@ if enableTrain:
             maxTrain_vs_validation_classDistributionDiff = np.Inf
             while maxTrain_vs_validation_classDistributionDiff > 25:  # a difference of 20% in one of the classes between train and validation
                 trainData, validationData = random_split(phoneCompleteDataset,[nTrain, nValidation])
-                
+                if validation_fraction == 0: break
                 # check if split is balanced:
                 trainClasses = phoneCompleteDataset.phonesDf[phoneCompleteDataset.phonesDf['Id'].isin(trainData.indices)]['gt']
                 values, counts = np.unique(trainClasses, return_counts=True)
@@ -126,9 +126,11 @@ if enableTrain:
                 validationClassesFraction_vs_trainClassesFraction = np.round(100*np.divide(np.abs(validationClassesFraction-trainClassesFraction), trainClassesFraction))
                 maxTrain_vs_validation_classDistributionDiff = validationClassesFraction_vs_trainClassesFraction.max()
                 print(f'max diff classes = {maxTrain_vs_validation_classDistributionDiff}')
+                
             
-            print(f'validation classes fraction {validationClassesFraction}')
-            print(f'train classes fraction {trainClassesFraction}')
+            if validation_fraction > 0: 
+                print(f'validation classes fraction {validationClassesFraction}')
+                print(f'train classes fraction {trainClassesFraction}')
             trainLoader = DataLoader(trainData, batch_size=batchSize, shuffle=True, num_workers=0)        
             validationLoader = DataLoader(validationData, batch_size=batchSize, shuffle=True, num_workers=0)
             
