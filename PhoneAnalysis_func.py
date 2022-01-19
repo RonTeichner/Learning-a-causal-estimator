@@ -322,7 +322,7 @@ def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, ena
         nMinimalSamples = np.floor(10*modelDict['fs'])  # equal to 10 seconds at the sample rate 
         nMaximalSamples = np.floor(30*modelDict['fs'])
     elif mode == 'test':
-        nValidationEpochs = 10  # for averaging the results over many augmentations
+        nValidationEpochs = 1  #10  # for averaging the results over many augmentations
         nMinimalSamples = np.floor(10*modelDict['fs'])  # equal to 10 seconds at the sample rate 
         nMaximalSamples = np.floor(30*modelDict['fs'])
     
@@ -402,13 +402,20 @@ def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, ena
                 lengthOfSeries = lengthOfSeries.to(device)
                 
                 if trainOnSmoother:
-                    hat_x_k_plus_1_given_N = smoother_rnn(measurements)          
+                    _, hat_x_k_plus_1_given_N = smoother_rnn(measurements)          
                     # now hat_x_k_plus_1_given_N at [:,k] has the estimation of the state at time [k+1] given measurements up to and including time N-1                               
                     hat_x_k_plus_1_given_N = hat_x_k_plus_1_given_N[:, :-1]
                     filteringLabels = torch.argmax(hat_x_k_plus_1_given_N, dim=2).unsqueeze(2).detach()
+                    correctLables = labels[:, 1:]
                 else:
                     filteringLabels = filteringLabels.to(device)
                 # measurements, funcOfMeas of shape [batchSize, nTime, nFeatures]
+                
+                for s in range(filteringLabels.shape[0]):
+                    plt.plot(filteringLabels[s, :lengthOfSeries[s]-1, 0].detach().cpu().numpy(), label='smoother')
+                    plt.plot(correctLables[s, :lengthOfSeries[s]-1, 0].detach().cpu().numpy(), label='ground truth')
+                    plt.legend()
+                    plt.show()
     
                 hat_x_k_plus_1_given_k, hat_x_k_plus_1_given_N_minus_1 = stateEst_ANN(measurements)
                 hat_x_k_plus_1_given_k, hat_x_k_plus_1_given_N_minus_1 = hat_x_k_plus_1_given_k[:, :-1], hat_x_k_plus_1_given_N_minus_1[:, :-1] # filtering
@@ -419,18 +426,25 @@ def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, ena
                 hat_x_k_plus_1_given_k_flatten = torch.flatten(hat_x_k_plus_1_given_k, start_dim=0, end_dim=-2)
                 hat_x_k_plus_1_given_N_minus_1_flatten = torch.flatten(hat_x_k_plus_1_given_N_minus_1, start_dim=0, end_dim=-2)
                 filteringLabels_flatten = torch.flatten(filteringLabels, start_dim=0, end_dim=-2)
-                if trainOnSmoother: DefinedClassIndices_flatten = torch.flatten(DefinedClassIndices, start_dim=0, end_dim=-2)
+                if trainOnSmoother: 
+                    DefinedClassIndices_flatten = torch.flatten(DefinedClassIndices, start_dim=0, end_dim=-2)
+                    correctLables_flatten = torch.flatten(correctLables, start_dim=0, end_dim=-2)
                 # torch.flatten(hat_x_k_plus_1_given_k, start_dim=0, end_dim=-2)[0] - hat_x_k_plus_1_given_k[0,0]
                 # torch.flatten(hat_x_k_plus_1_given_k, start_dim=0, end_dim=-2)[1] - hat_x_k_plus_1_given_k[0,1]
                 # torch.flatten(hat_x_k_plus_1_given_k, start_dim=0, end_dim=-2)[hat_x_k_plus_1_given_k.shape[1]] - hat_x_k_plus_1_given_k[1,0]
                 validIndices = torch.zeros_like(hat_x_k_plus_1_given_k_flatten[:, 0]).bool()
                 for s in range(lengthOfSeries.shape[0]):
                     seriesLength = lengthOfSeries[s] - 1
+                    if trainOnSmoother: 
+                        seriesLength = int(torch.min(torch.tensor(np.floor(15*modelDict['fs'])), seriesLength).item())
                     seriesStartIdx = nTime*s
                     seriesStopIdx = seriesStartIdx + seriesLength
                     validIndices[seriesStartIdx : seriesStopIdx] = True
                     
-                if trainOnSmoother: validIndices = torch.logical_and(validIndices, DefinedClassIndices_flatten[:, 0])
+                if trainOnSmoother: 
+                    validIndices = torch.logical_and(validIndices, DefinedClassIndices_flatten[:, 0])
+                    correctSmootherLabelsFraction = ((correctLables_flatten[validIndices].detach().cpu().numpy() == filteringLabels_flatten[validIndices].detach().cpu().numpy()).sum()/validIndices.detach().cpu().numpy().sum())
+                    print(f'correctSmootherLabelsFraction = {round(100*correctSmootherLabelsFraction)}')
                                                     
                 lossFilter = criterion(hat_x_k_plus_1_given_k_flatten[validIndices], filteringLabels_flatten[validIndices, 0])            
                 lossSmoother = criterion(hat_x_k_plus_1_given_N_minus_1_flatten[validIndices], filteringLabels_flatten[validIndices, 0])            
@@ -531,7 +545,7 @@ def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, ena
                     lengthOfSeries = lengthOfSeries.to(device)
                     
                     if trainOnSmoother:
-                        hat_x_k_plus_1_given_N = smoother_rnn(measurements)          
+                        _, hat_x_k_plus_1_given_N = smoother_rnn(measurements)          
                         # now hat_x_k_plus_1_given_N at [:,k] has the estimation of the state at time [k+1] given measurements up to and including time N-1                               
                         hat_x_k_plus_1_given_N = hat_x_k_plus_1_given_N[:, :-1]
                         filteringLabels = torch.argmax(hat_x_k_plus_1_given_N, dim=2).unsqueeze(2).detach()
@@ -559,6 +573,8 @@ def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, ena
                         singleOne = torch.ones(1, dtype=torch.int64, device=hat_x_k_plus_1_given_k_flatten.device)
                     for s in range(lengthOfSeries.shape[0]):
                         seriesLength = lengthOfSeries[s] - 1
+                        if trainOnSmoother: 
+                            seriesLength = int(torch.min(torch.tensor(np.floor(15*modelDict['fs'])), seriesLength).item())
                         seriesStartIdx = nTime*s
                         seriesStopIdx = seriesStartIdx + seriesLength
                         validIndices[seriesStartIdx : seriesStopIdx] = True

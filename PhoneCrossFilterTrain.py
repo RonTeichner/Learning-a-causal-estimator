@@ -18,11 +18,11 @@ import copy
 from PhoneAnalysis_func import *
 
 
-enableTrain = False 
+enableTrain = True 
 enableSparse = True
 enableTest = True
-onlyDedicated = True
-noImprove = True
+onlyDedicated = False
+noImprove = False
 jointEstimators = True
 enableOverwriteStatistics = False
 
@@ -40,10 +40,10 @@ fs = 1/0.005
     
 if enableTrain:
     for smootherPhoneModel, phoneSavedSmootherFileName in zip(phoneAnalysisFileNamesTrainData, phoneSavedSmootherFileNames):
-        #if not(smootherPhoneModel == 's3'): continue
+        if not(smootherPhoneModel == 'nexus4'): continue
         for phoneAnalysisFileNameTrainData in phoneAnalysisFileNamesTrainData:  # the improved filter
             if phoneAnalysisFileNameTrainData == smootherPhoneModel: continue
-            #if not(phoneAnalysisFileNameTrainData == 's3mini'): continue
+            if not(phoneAnalysisFileNameTrainData == 's3mini'): continue
         
             phoneSavedModelFileName = sparseStr + 'improvedFilterFor_' + phoneAnalysisFileNameTrainData + '_trainedOnSmootherOf_' + smootherPhoneModel
             print(f'starting {phoneSavedModelFileName}')
@@ -56,15 +56,15 @@ if enableTrain:
             values, counts = np.unique(classes, return_counts=True)
             counts = counts/counts.sum()
             values = ['noClass', 'stand', 'sit', 'walk', 'stairsup', 'stairsdown', 'bike']
-            plt.bar(values, counts)
-            plt.title(model)
-            plt.show()
+            #plt.bar(values, counts)
+            #plt.title(model)
+            #plt.show()
             
             statisticsDict = {'classDistribution': (values, counts), 'mu': phoneCompleteDataset.mu, 'Sigma_minus_half': phoneCompleteDataset.Sigma_minus_half, 'Sigma_half': phoneCompleteDataset.Sigma_half}
             print(f'dataset contains {len(phoneCompleteDataset)} time series')
             
             # training properties:    
-            trainOnNormalizedData = False    
+            trainOnNormalizedData = True    
             nTrainsForCrossValidation = 1
             nTrainsOnSameSplit = 1 # not more than 1 because train indices will not match
             batchSize = 8*10
@@ -84,7 +84,7 @@ if enableTrain:
             
             enableDataParallel = True
             
-            modelDict = {'trainedOn': smootherPhoneModel, 'smoother': False, 'nClasses': nClasses, 'hidden_dim': hidden_dim, 'num_layers': num_layers, 'useSelectedFeatures': useSelectedFeatures, 'allFeatures': allFeatures, 'featuresIncludeInTrainIndices': featuresIncludeInTrainIndices, 'nFeatures': phoneCompleteDataset.nFeatures, 'trainOnNormalizedData': trainOnNormalizedData, 'statisticsDict': statisticsDict, 'fs': 1/0.005}
+            modelDict = {'enableSparse': enableSparse, 'trainedOn': smootherPhoneModel, 'smoother': True, 'nClasses': nClasses, 'hidden_dim': hidden_dim, 'num_layers': num_layers, 'useSelectedFeatures': useSelectedFeatures, 'allFeatures': allFeatures, 'featuresIncludeInTrainIndices': featuresIncludeInTrainIndices, 'nFeatures': phoneCompleteDataset.nFeatures, 'trainOnNormalizedData': trainOnNormalizedData, 'statisticsDict': statisticsDict, 'fs': 1/0.005}
             
             
             model_state_dict_list, validationLoss_list = list(), list()
@@ -136,6 +136,7 @@ if enableTrain:
                 savedSmoother.eval()
                 
                 Filter_rnn = RNN_Filter(input_dim = len(modelDict['allFeatures']), hidden_dim=modelDict['hidden_dim'], output_dim=modelDict['nClasses'], num_layers=modelDict['num_layers'], modelDict=modelDict)
+                #Filter_rnn.load_state_dict(torch.load(phoneSavedSmootherFileName  + '_model.pt')) 
                 
                 # train:  
                 validationLoss = np.inf
@@ -333,6 +334,7 @@ if enableTest:
                 
                 print(f'starting test of {testedPhoneModel} on model {improvedFilterFileName}')
                 _, _, improvedFilter_meanLikelihood_vsTime_tuple = trainModel(estimatorRnn, improvedFilter_trainLoader, improvedFilter_validationLoader, phoneCompleteDataset, enableDataParallel, improvedFilterModelDict, True, 'test')
+                improvedFilter_meanLikelihood_vsTime_tuple = (improvedFilter_meanLikelihood_vsTime_tuple[0], improvedFilter_meanLikelihood_vsTime_tuple[1])
             else:                
                 improvedFilter_meanLikelihood_vsTime_tuple = (np.zeros_like(dedicatedSmoother_meanLikelihood_vsTime_tuple[0]), dedicatedSmoother_meanLikelihood_vsTime_tuple[1])
                 
