@@ -3,7 +3,7 @@
 """
 Created on Mon Dec 20 10:22:05 2021
 
-@author: ront
+@author: 
 """
 import sys
 import torch
@@ -20,11 +20,14 @@ from PhoneAnalysis_func import *
 
 enableTrain = True 
 enableSparse = True
+
 enableTest = True
 onlyDedicated = False
 noImprove = False
 jointEstimators = True
 enableOverwriteStatistics = False
+
+enablePlotTest = True
 
 if enableSparse:
     sparseStr = 'sparse_'
@@ -40,7 +43,7 @@ fs = 1/0.005
     
 if enableTrain:
     for smootherPhoneModel, phoneSavedSmootherFileName in zip(phoneAnalysisFileNamesTrainData, phoneSavedSmootherFileNames):
-        if not(smootherPhoneModel == 'nexus4'): continue
+        if not(smootherPhoneModel == 's3mini'): continue
         for phoneAnalysisFileNameTrainData in phoneAnalysisFileNamesTrainData:  # the improved filter
             if phoneAnalysisFileNameTrainData == smootherPhoneModel: continue
             if not(phoneAnalysisFileNameTrainData == 's3mini'): continue
@@ -66,7 +69,7 @@ if enableTrain:
             # training properties:    
             trainOnNormalizedData = True    
             nTrainsForCrossValidation = 1
-            nTrainsOnSameSplit = 1 # not more than 1 because train indices will not match
+            nTrainsOnSameSplit = 3 # not more than 1 because train indices will not match
             batchSize = 8*10
             validation_fraction = 0.3
             nValidation = int(validation_fraction*len(phoneCompleteDataset))
@@ -157,10 +160,11 @@ if enableTrain:
             torch.save(model_state_dict_list[Ann_idx], phoneSavedModelFileName + '_model.pt')
             
 if enableTest:
-    enableDataParallel = True
+    enableDataParallel = False
     resultList = list()
     for phoneAnalysisFileNameTestData, phoneSavedFilterFileName, phoneSavedSmootherFileName in zip(phoneAnalysisFileNamesTrainData, phoneSavedFilterFileNames, phoneSavedSmootherFileNames):
-        #if not(phoneAnalysisFileNameTestData == 's3'): continue
+        if not(phoneAnalysisFileNameTestData == 's3mini'): continue
+            
         # load phone's dataset and dedicated filter for reference performance
         print(f'creating test dataset, filename {phoneAnalysisFileNameTestData}')
         phoneCompleteDataset = pickle.load(open(phoneAnalysisFileNameTestData + '_dataset.pt', 'rb'))    
@@ -363,39 +367,67 @@ if enableTest:
             plt.legend()
             plt.show()
             
-            resultDict = {'testedPhone': phoneAnalysisFileNameTestData, 'estimatorPhone': testedPhoneModel, 'dedicatedFilter': dedicatedFilter_meanLikelihood_vsTime_tuple, 'dedicatedSmoother': dedicatedSmoother_meanLikelihood_vsTime_tuple, 'nonDedicatedFilter': nonDedicatedFilter_meanLikelihood_vsTime_tuple, 'nonDedicatedSmoother': nonDedicatedSmoother_meanLikelihood_vsTime_tuple, 'learnedFilter': improvedFilter_meanLikelihood_vsTime_tuple}
+            resultDict = {'testedPhone': testedPhoneModel, 'estimatorPhone':  phoneAnalysisFileNameTestData, 'dedicatedFilter': dedicatedFilter_meanLikelihood_vsTime_tuple, 'dedicatedSmoother': dedicatedSmoother_meanLikelihood_vsTime_tuple, 'nonDedicatedFilter': nonDedicatedFilter_meanLikelihood_vsTime_tuple, 'nonDedicatedSmoother': nonDedicatedSmoother_meanLikelihood_vsTime_tuple, 'learnedFilter': improvedFilter_meanLikelihood_vsTime_tuple}
             resultList.append(resultDict)
 
     pickle.dump(resultList, open('allResults.pt', 'wb'))
     
 if enablePlotTest:
-    resultList = pickle.load(open('allResultsFullRes.pt', 'rb'))
+    resultList = pickle.load(open('allResults.pt', 'rb'))
+        
+    resultsDict = resultList[-2]
+    plt.close()
     
-    for resultDict in resultList:
-        # plots:
-        resTuple=resultsDict['dedicatedFilter']
-        plt.plot(resTuple[1], resTuple[0], label=resultsDict['testedPhone'] + ' on ' + resultsDict['testedPhone'] + ' filter')
-        
-        resTuple=resultsDict['dedicatedSmoother']            
-        plt.plot(resTuple[1], resTuple[0], label=resultsDict['testedPhone'] + ' on ' + resultsDict['testedPhone'] + ' smoother')
-        
-        resTuple=resultsDict['nonDedicatedFilter']            
-        plt.plot(resTuple[1], resTuple[0], label=resultsDict['testedPhone'] + ' on ' + resultsDict['estimatorPhone'] + ' filter')
-        
-        resTuple=resultsDict['nonDedicatedSmoother']            
-        plt.plot(resTuple[1], resTuple[0], label=resultsDict['testedPhone'] + ' on ' + resultsDict['estimatorPhone'] + ' smoother')
-        
-        resTuple=resultsDict['learnedFilter']            
-        plt.plot(resTuple[1], resTuple[0], label=resultsDict['testedPhone'] + ' on ' + 'improved filter')                        
-        
-        plt.xlabel('sec from change of state')
-        plt.ylabel('likelihood')
-        plt.grid()
-        #plt.ylim([0.4, 0.85])
-        #plt.xlim([0, 4])
-        plt.legend()
-        plt.show()
-            
+    plt.figure(figsize=(8,6))
+    plt.subplot(1, 2, 1)
+    # plots:
+    resTuple=resultsDict['dedicatedFilter']
+    plt.plot(resTuple[1], resTuple[0], linestyle=(0, (5, 10)), label=resultsDict['estimatorPhone'] + ' on ' + resultsDict['estimatorPhone'] + ' filter')
+    
+    resTuple=resultsDict['dedicatedSmoother']            
+    plt.plot(resTuple[1], resTuple[0], linestyle='dotted', label=resultsDict['estimatorPhone'] + ' on ' + resultsDict['estimatorPhone'] + ' smoother')
+    
+    resTuple=resultsDict['nonDedicatedFilter']            
+    plt.plot(resTuple[1], resTuple[0], linestyle='dashed', label=resultsDict['testedPhone'] + ' on ' + resultsDict['estimatorPhone'] + ' filter')
+    
+    resTuple=resultsDict['nonDedicatedSmoother']            
+    plt.plot(resTuple[1], resTuple[0], linestyle='dashdot', label=resultsDict['testedPhone'] + ' on ' + resultsDict['estimatorPhone'] + ' smoother')
+    
+    resTuple=resultsDict['learnedFilter']            
+    plt.plot(resTuple[1], resTuple[0], linestyle='solid', label=resultsDict['testedPhone'] + ' on ' + 'improved filter')                        
+    
+    plt.xlabel('sec from change of state')
+    plt.ylabel('Posterio probability of correct category')
+    plt.grid()
+    plt.ylim([0.2, 0.75])
+    plt.xlim([0, 6])
+    plt.legend()
+    
+    resultsDict = resultList[-1]
+    plt.subplot(1, 2, 2)
+    # plots:
+    resTuple=resultsDict['dedicatedFilter']
+    plt.plot(resTuple[1], resTuple[0], linestyle=(0, (5, 10)), label=resultsDict['estimatorPhone'] + ' on ' + resultsDict['estimatorPhone'] + ' filter')
+    
+    resTuple=resultsDict['dedicatedSmoother']            
+    plt.plot(resTuple[1], resTuple[0], linestyle='dotted', label=resultsDict['estimatorPhone'] + ' on ' + resultsDict['estimatorPhone'] + ' smoother')
+    
+    resTuple=resultsDict['nonDedicatedFilter']            
+    plt.plot(resTuple[1], resTuple[0], linestyle='dashed', label=resultsDict['testedPhone'] + ' on ' + resultsDict['estimatorPhone'] + ' filter')
+    
+    resTuple=resultsDict['nonDedicatedSmoother']            
+    plt.plot(resTuple[1], resTuple[0], linestyle='dashdot', label=resultsDict['testedPhone'] + ' on ' + resultsDict['estimatorPhone'] + ' smoother')
+    
+    resTuple=resultsDict['learnedFilter']            
+    plt.plot(resTuple[1], resTuple[0], linestyle='solid', label=resultsDict['testedPhone'] + ' on ' + 'improved filter')                        
+    
+    plt.xlabel('sec from change of state')
+    #plt.ylabel('Posterio probability of correct category')
+    plt.grid()
+    plt.ylim([0.2, 0.75])
+    plt.xlim([0, 6])
+    plt.legend()
+    plt.show()
             
             
             

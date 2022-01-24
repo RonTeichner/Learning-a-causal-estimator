@@ -3,7 +3,7 @@
 """
 Created on Mon Dec 20 10:22:05 2021
 
-@author: ront
+@author: 
 """
 import sys
 import torch

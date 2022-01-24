@@ -3,7 +3,7 @@
 """
 Created on Mon Dec 13 15:32:38 2021
 
-@author: ront
+@author:
 """
 
 import pandas as pd
@@ -15,6 +15,17 @@ from scipy import interpolate
 import pickle
 
 def united_acc_gyr_singleUserSingleDevice(enable_acc_only, Phones_acc_specificUserDevice_DF, Phones_gyr_specificUserDevice_DF, cutObservationsGapThr, minObservedDuration):
+    savePaperPlot = False
+    if savePaperPlot:
+        if Phones_acc_specificUserDevice_DF['User'].unique()[0] == 'd':
+            user = Phones_acc_specificUserDevice_DF['User'].unique()[0]
+            device = Phones_acc_specificUserDevice_DF['Device'].unique()[0]
+            acc_tvec = ((Phones_acc_specificUserDevice_DF['Creation_Time'] - Phones_acc_specificUserDevice_DF['Creation_Time'].to_numpy()[0])/1e9).to_numpy()
+            acc_x_tuple = (acc_tvec, Phones_acc_specificUserDevice_DF['acc_x'])
+            pickle.dump(acc_x_tuple, open('accPlot_user_' + user + '_device_' + device + '_.pt', 'wb'))
+            print('accPlot_user_' + user + '_device_' + device + '_.pt' + ' saved')
+            
+            
     plotData = False
     if plotData:
         user = Phones_acc_specificUserDevice_DF['User'].unique()[0]
@@ -95,7 +106,6 @@ def united_acc_gyr_singleUserSingleDevice(enable_acc_only, Phones_acc_specificUs
     assert (durations >= minObservedDuration).all()
     return Phone_specificUserSpecificDevice
     
-
 def DataFrameResample(patientDf, fs):
     assert len(patientDf['Id'].unique().tolist()) == 1  # this function works for a single Id Df
     Id = patientDf['Id'].unique().tolist()[0]

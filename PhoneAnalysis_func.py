@@ -3,7 +3,7 @@
 """
 Created on Mon Dec 20 10:08:08 2021
 
-@author: ront
+@author: 
 """
 
 import numpy as np
@@ -322,7 +322,7 @@ def trainModel(stateEst_ANN, trainLoader, validationLoader, patientsDataset, ena
         nMinimalSamples = np.floor(10*modelDict['fs'])  # equal to 10 seconds at the sample rate 
         nMaximalSamples = np.floor(30*modelDict['fs'])
     elif mode == 'test':
-        nValidationEpochs = 1  #10  # for averaging the results over many augmentations
+        nValidationEpochs = 10  #10  # for averaging the results over many augmentations
         nMinimalSamples = np.floor(10*modelDict['fs'])  # equal to 10 seconds at the sample rate 
         nMaximalSamples = np.floor(30*modelDict['fs'])
     
